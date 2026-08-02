@@ -31,10 +31,7 @@ public sealed class WhamHotkeyWindow : NativeWindow, IDisposable
 
     public event Action<int> HotkeyPressed;
 
-    public WhamHotkeyWindow()
-    {
-        CreateHandle(new CreateParams());
-    }
+    public WhamHotkeyWindow() { CreateHandle(new CreateParams()); }
 
     public void Register(int id, uint modifiers, uint key)
     {
@@ -42,10 +39,7 @@ public sealed class WhamHotkeyWindow : NativeWindow, IDisposable
             throw new InvalidOperationException("Hotkey registration failed for id " + id + ". Win32 error: " + Marshal.GetLastWin32Error());
     }
 
-    public void Unregister(int id)
-    {
-        UnregisterHotKey(Handle, id);
-    }
+    public void Unregister(int id) { UnregisterHotKey(Handle, id); }
 
     protected override void WndProc(ref Message message)
     {
@@ -54,20 +48,14 @@ public sealed class WhamHotkeyWindow : NativeWindow, IDisposable
         base.WndProc(ref message);
     }
 
-    public void Dispose()
-    {
-        DestroyHandle();
-    }
+    public void Dispose() { DestroyHandle(); }
 }
 '@
 
 function Read-Macros {
     param([Parameter(Mandatory)][string]$Path)
 
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Macros file not found: $Path"
-    }
-
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Macros file not found: $Path" }
     $items = @(Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
     if ($items.Count -eq 0) { throw 'At least one macro is required.' }
 
@@ -78,12 +66,10 @@ function Read-Macros {
                 throw "Macro is missing required property '$property'."
             }
         }
-
         $normalized = ([string]$item.hotkey).ToUpperInvariant()
         if ($seenHotkeys.ContainsKey($normalized)) { throw "Duplicate hotkey: $($item.hotkey)" }
         $seenHotkeys[$normalized] = $true
     }
-
     return $items
 }
 
@@ -105,32 +91,147 @@ function ConvertTo-HotkeyBinding {
             }
         }
     }
-
     if (-not $keyName) { throw "Hotkey has no key: $Hotkey" }
     if ($keyName -match '^[0-9]$') { $keyName = "D$keyName" }
-    try {
-        $key = [System.Enum]::Parse([System.Windows.Forms.Keys], $keyName, $true)
+    try { $key = [System.Enum]::Parse([System.Windows.Forms.Keys], $keyName, $true) }
+    catch { throw "Unsupported key '$keyName' in hotkey '$Hotkey'." }
+    return [pscustomobject]@{ Modifiers = $modifiers; Key = [uint32]$key }
+}
+
+function Get-TemplateVariables {
+    param([Parameter(Mandatory)][string]$Template)
+
+    $seen = @{}
+    $names = [Collections.Generic.List[string]]::new()
+    foreach ($match in [regex]::Matches($Template, '\{(?<name>[\p{L}_][\p{L}\p{Nd}_]*)\}')) {
+        $name = $match.Groups['name'].Value
+        if (-not $seen.ContainsKey($name)) {
+            $seen[$name] = $true
+            $names.Add($name)
+        }
     }
-    catch {
-        throw "Unsupported key '$keyName' in hotkey '$Hotkey'."
+    return $names.ToArray()
+}
+
+function Expand-Template {
+    param(
+        [Parameter(Mandatory)][string]$Template,
+        [Parameter(Mandatory)][Collections.IDictionary]$Values
+    )
+
+    $result = $Template
+    foreach ($name in $Values.Keys) {
+        $result = $result.Replace("{$name}", [string]$Values[$name])
+    }
+    return $result
+}
+
+function Show-TemplateDialog {
+    param(
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)][string]$Template
+    )
+
+    $variables = @(Get-TemplateVariables -Template $Template)
+    if ($variables.Count -eq 0) { return $Template }
+
+    $form = [System.Windows.Forms.Form]::new()
+    $form.Text = "WHAM — $Title"
+    $form.StartPosition = 'CenterScreen'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MinimizeBox = $false
+    $form.MaximizeBox = $false
+    $form.ShowInTaskbar = $true
+    $form.ClientSize = [Drawing.Size]::new(560, (190 + [Math]::Min($variables.Count, 6) * 44))
+    $form.Font = [Drawing.Font]::new('Segoe UI', 10)
+
+    $inputs = @{}
+    $top = 16
+    foreach ($name in $variables) {
+        $label = [System.Windows.Forms.Label]::new()
+        $label.Text = $name.Replace('_', ' ')
+        $label.Location = [Drawing.Point]::new(16, ($top + 5))
+        $label.Size = [Drawing.Size]::new(155, 25)
+        $form.Controls.Add($label)
+
+        $input = [System.Windows.Forms.TextBox]::new()
+        $input.Location = [Drawing.Point]::new(175, $top)
+        $input.Size = [Drawing.Size]::new(365, 27)
+        $form.Controls.Add($input)
+        $inputs[$name] = $input
+        $top += 44
     }
 
-    return [pscustomobject]@{ Modifiers = $modifiers; Key = [uint32]$key }
+    $previewLabel = [System.Windows.Forms.Label]::new()
+    $previewLabel.Text = 'Предпросмотр'
+    $previewLabel.Location = [Drawing.Point]::new(16, $top)
+    $previewLabel.Size = [Drawing.Size]::new(150, 24)
+    $form.Controls.Add($previewLabel)
+    $top += 25
+
+    $preview = [System.Windows.Forms.TextBox]::new()
+    $preview.Location = [Drawing.Point]::new(16, $top)
+    $preview.Size = [Drawing.Size]::new(524, 90)
+    $preview.Multiline = $true
+    $preview.ScrollBars = 'Vertical'
+    $preview.ReadOnly = $true
+    $form.Controls.Add($preview)
+    $top += 102
+
+    $insertButton = [System.Windows.Forms.Button]::new()
+    $insertButton.Text = 'Вставить'
+    $insertButton.Location = [Drawing.Point]::new(340, $top)
+    $insertButton.Size = [Drawing.Size]::new(95, 32)
+    $form.Controls.Add($insertButton)
+
+    $cancelButton = [System.Windows.Forms.Button]::new()
+    $cancelButton.Text = 'Отмена'
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $cancelButton.Location = [Drawing.Point]::new(445, $top)
+    $cancelButton.Size = [Drawing.Size]::new(95, 32)
+    $form.Controls.Add($cancelButton)
+
+    $form.ClientSize = [Drawing.Size]::new(560, ($top + 48))
+    $form.AcceptButton = $insertButton
+    $form.CancelButton = $cancelButton
+
+    $refreshPreview = {
+        $values = @{}
+        foreach ($name in $variables) { $values[$name] = $inputs[$name].Text }
+        $preview.Text = Expand-Template -Template $Template -Values $values
+    }
+    foreach ($input in $inputs.Values) { $input.add_TextChanged($refreshPreview) }
+    & $refreshPreview
+
+    $insertButton.add_Click({
+        $empty = @($variables | Where-Object { [string]::IsNullOrWhiteSpace($inputs[$_].Text) })
+        if ($empty.Count -gt 0) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Заполните поля: $($empty -join ', ')",
+                'WHAM Quick Replies',
+                'OK',
+                'Warning'
+            ) | Out-Null
+            return
+        }
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Close()
+    })
+
+    try {
+        if ($inputs.Count -gt 0) { $inputs[$variables[0]].Focus() | Out-Null }
+        if ($form.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+        return $preview.Text
+    }
+    finally { $form.Dispose() }
 }
 
 function Set-ClipboardTextWithRetry {
     param([Parameter(Mandatory)][string]$Text)
-
     $lastError = $null
     foreach ($attempt in 1..5) {
-        try {
-            [System.Windows.Forms.Clipboard]::SetText($Text)
-            return
-        }
-        catch {
-            $lastError = $_
-            Start-Sleep -Milliseconds 80
-        }
+        try { [System.Windows.Forms.Clipboard]::SetText($Text); return }
+        catch { $lastError = $_; Start-Sleep -Milliseconds 80 }
     }
     throw "Could not access the clipboard: $lastError"
 }
@@ -155,7 +256,9 @@ try {
         param([int]$registrationId)
         try {
             $macro = $macrosById[$registrationId]
-            Set-ClipboardTextWithRetry -Text ([string]$macro.text)
+            $rendered = Show-TemplateDialog -Title ([string]$macro.title) -Template ([string]$macro.text)
+            if ($null -eq $rendered) { return }
+            Set-ClipboardTextWithRetry -Text $rendered
             [System.Windows.Forms.SendKeys]::SendWait('^v')
         }
         catch {
@@ -179,7 +282,6 @@ try {
     $notifyIcon.ContextMenuStrip = $menu
     $notifyIcon.Visible = $true
     $notifyIcon.ShowBalloonTip(2500, 'WHAM Quick Replies', "$($macros.Count) macros are active.", 'Info')
-
     [System.Windows.Forms.Application]::Run()
 }
 finally {
