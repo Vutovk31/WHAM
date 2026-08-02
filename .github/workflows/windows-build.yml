@@ -1,0 +1,47 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate macro contracts
+        run: node tests/test-macros.mjs
+
+      - name: Validate macros with Windows PowerShell
+        shell: powershell
+        run: .\tests\Test-Macros.ps1
+
+      - name: Run Windows self-test
+        shell: powershell
+        run: .\WHAM.QuickReplies.ps1 -SelfTest
+
+      - name: Build portable package
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path dist\WHAM-Quick-Replies -Force | Out-Null
+          Copy-Item WHAM.QuickReplies.ps1, macros.json, start-wham.cmd, README.md -Destination dist\WHAM-Quick-Replies
+          Compress-Archive -Path dist\WHAM-Quick-Replies -DestinationPath dist\WHAM-Quick-Replies-windows-x64.zip -Force
+          $hash = (Get-FileHash dist\WHAM-Quick-Replies-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  WHAM-Quick-Replies-windows-x64.zip" | Set-Content dist\SHA256SUMS.txt -Encoding ASCII
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: WHAM-Quick-Replies-windows-x64
+          path: |
+            dist/WHAM-Quick-Replies-windows-x64.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

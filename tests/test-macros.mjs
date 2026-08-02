@@ -28,6 +28,9 @@ for (const contract of [
   'Show-FatalStartupError',
   'WHAM-errors.log',
   'Сочетание занято другой программой',
+  '[switch]$SelfTest',
+  'WHAM Windows self-test passed.',
+  "ConvertTo-HotkeyBinding -Hotkey 'Ctrl+Alt+F24'",
 ]) {
   assert.ok(script.includes(contract), `Missing safe clipboard contract: ${contract}`);
 }

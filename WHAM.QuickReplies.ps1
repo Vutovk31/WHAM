@@ -1,7 +1,8 @@
 #requires -version 5.1
 
 param(
-    [string]$MacrosPath = (Join-Path $PSScriptRoot 'macros.json')
+    [string]$MacrosPath = (Join-Path $PSScriptRoot 'macros.json'),
+    [switch]$SelfTest
 )
 
 Set-StrictMode -Version Latest
@@ -34,6 +35,10 @@ function Show-FatalStartupError {
 }
 
 trap {
+    if ($SelfTest) {
+        [Console]::Error.WriteLine($_.Exception.ToString())
+        exit 1
+    }
     Show-FatalStartupError -Message $_.Exception.Message
     break
 }
@@ -313,6 +318,28 @@ function Invoke-SafePaste {
     $timer.add_Tick($restore)
     $script:clipboardRestoreTimers.Add($timer)
     $timer.Start()
+}
+
+if ($SelfTest) {
+    $testMacros = @(Read-Macros -Path $MacrosPath)
+    if ($testMacros.Count -ne 5) { throw "Self-test expected 5 macros, got $($testMacros.Count)." }
+
+    $variables = @(Get-TemplateVariables -Template 'Добрый день, {имя}! Заказ №{номер}.')
+    if (($variables -join ',') -ne 'имя,номер') { throw 'Variable extraction self-test failed.' }
+
+    $rendered = Expand-Template -Template 'Добрый день, {имя}!' -Values @{ 'имя' = 'Тест' }
+    if ($rendered -ne 'Добрый день, Тест!') { throw 'Template expansion self-test failed.' }
+
+    $binding = ConvertTo-HotkeyBinding -Hotkey 'Ctrl+Alt+F24'
+    $testWindow = [WhamHotkeyWindow]::new()
+    try {
+        $testWindow.Register(9001, $binding.Modifiers, $binding.Key)
+        $testWindow.Unregister(9001)
+    }
+    finally { $testWindow.Dispose() }
+
+    Write-Output 'WHAM Windows self-test passed.'
+    exit 0
 }
 
 $macros = Read-Macros -Path $MacrosPath
