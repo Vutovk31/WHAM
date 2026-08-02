@@ -14,6 +14,30 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+function Show-FatalStartupError {
+    param([Parameter(Mandatory)][string]$Message)
+
+    try {
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        Add-Content -LiteralPath (Join-Path $PSScriptRoot 'WHAM-errors.log') -Encoding UTF8 -Value "[$timestamp] $Message"
+    }
+    catch {
+        # A read-only folder must not hide the original startup error.
+    }
+
+    [System.Windows.Forms.MessageBox]::Show(
+        "$Message`r`n`r`nПодробности сохранены в WHAM-errors.log.",
+        'WHAM Quick Replies — ошибка запуска',
+        'OK',
+        'Error'
+    ) | Out-Null
+}
+
+trap {
+    Show-FatalStartupError -Message $_.Exception.Message
+    break
+}
+
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -303,7 +327,12 @@ try {
     for ($index = 0; $index -lt $macros.Count; $index++) {
         $registrationId = $index + 1
         $binding = ConvertTo-HotkeyBinding -Hotkey ([string]$macros[$index].hotkey)
-        $hotkeyWindow.Register($registrationId, $binding.Modifiers, $binding.Key)
+        try {
+            $hotkeyWindow.Register($registrationId, $binding.Modifiers, $binding.Key)
+        }
+        catch {
+            throw "Не удалось назначить '$($macros[$index].hotkey)' макросу '$($macros[$index].title)'. Сочетание занято другой программой или Windows. Измените поле hotkey в macros.json и перезапустите WHAM. $($_.Exception.Message)"
+        }
         $registeredIds.Add($registrationId)
         $macrosById[$registrationId] = $macros[$index]
     }

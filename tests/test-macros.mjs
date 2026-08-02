@@ -25,6 +25,9 @@ for (const contract of [
   'GetText() -cne $ExpectedText',
   'SetDataObject($Snapshot, $true)',
   'clipboardRestoreTimers',
+  'Show-FatalStartupError',
+  'WHAM-errors.log',
+  'Сочетание занято другой программой',
 ]) {
   assert.ok(script.includes(contract), `Missing safe clipboard contract: ${contract}`);
 }
