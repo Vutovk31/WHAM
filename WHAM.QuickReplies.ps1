@@ -43,7 +43,7 @@ trap {
     break
 }
 
-Add-Type -TypeDefinition @'
+Add-Type -ReferencedAssemblies 'System.Windows.Forms.dll' -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
