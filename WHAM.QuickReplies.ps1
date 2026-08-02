@@ -85,7 +85,8 @@ function Read-Macros {
     param([Parameter(Mandatory)][string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Macros file not found: $Path" }
-    $items = @(Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
+    $parsed = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $items = @(foreach ($item in $parsed) { $item })
     if ($items.Count -eq 0) { throw 'At least one macro is required.' }
 
     $seenHotkeys = @{}

@@ -2,7 +2,8 @@
 
 $ErrorActionPreference = 'Stop'
 $path = Join-Path (Split-Path $PSScriptRoot -Parent) 'macros.json'
-$macros = @(Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json)
+$parsed = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+$macros = @(foreach ($macro in $parsed) { $macro })
 
 if ($macros.Count -ne 5) { throw "Expected 5 starter macros, got $($macros.Count)." }
 $required = 'id', 'title', 'hotkey', 'text'
