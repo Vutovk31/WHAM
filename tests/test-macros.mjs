@@ -31,6 +31,10 @@ for (const contract of [
   '[switch]$SelfTest',
   'WHAM Windows self-test passed.',
   "ConvertTo-HotkeyBinding -Hotkey 'Ctrl+Alt+F24'",
+  'function Show-MacroEditor',
+  'function Write-Macros',
+  'Редактор макросов',
+  'restartRequested',
 ]) {
   assert.ok(script.includes(contract), `Missing safe clipboard contract: ${contract}`);
 }
