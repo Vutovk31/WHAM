@@ -236,9 +236,65 @@ function Set-ClipboardTextWithRetry {
     throw "Could not access the clipboard: $lastError"
 }
 
+function Restore-ClipboardSnapshot {
+    param(
+        [AllowNull()][object]$Snapshot,
+        [Parameter(Mandatory)][string]$ExpectedText
+    )
+
+    try {
+        if (-not [System.Windows.Forms.Clipboard]::ContainsText()) { return }
+        if ([System.Windows.Forms.Clipboard]::GetText() -cne $ExpectedText) { return }
+
+        if ($null -eq $Snapshot) {
+            [System.Windows.Forms.Clipboard]::Clear()
+        }
+        else {
+            [System.Windows.Forms.Clipboard]::SetDataObject($Snapshot, $true)
+        }
+    }
+    catch {
+        # Clipboard ownership can change at any time. Never overwrite newer
+        # user data or interrupt the target application because restore failed.
+    }
+}
+
+function Invoke-SafePaste {
+    param([Parameter(Mandatory)][string]$Text)
+
+    $snapshot = $null
+    try { $snapshot = [System.Windows.Forms.Clipboard]::GetDataObject() }
+    catch { $snapshot = $null }
+
+    Set-ClipboardTextWithRetry -Text $Text
+    try {
+        [System.Windows.Forms.SendKeys]::SendWait('^v')
+    }
+    catch {
+        Restore-ClipboardSnapshot -Snapshot $snapshot -ExpectedText $Text
+        throw
+    }
+
+    $timer = [System.Windows.Forms.Timer]::new()
+    $timer.Interval = 1000
+    $restore = {
+        param($sender, $eventArgs)
+        $sender.Stop()
+        try { Restore-ClipboardSnapshot -Snapshot $snapshot -ExpectedText $Text }
+        finally {
+            [void]$script:clipboardRestoreTimers.Remove($sender)
+            $sender.Dispose()
+        }
+    }.GetNewClosure()
+    $timer.add_Tick($restore)
+    $script:clipboardRestoreTimers.Add($timer)
+    $timer.Start()
+}
+
 $macros = Read-Macros -Path $MacrosPath
 $macrosById = @{}
 $registeredIds = [Collections.Generic.List[int]]::new()
+$script:clipboardRestoreTimers = [Collections.Generic.List[System.Windows.Forms.Timer]]::new()
 $hotkeyWindow = [WhamHotkeyWindow]::new()
 $notifyIcon = [System.Windows.Forms.NotifyIcon]::new()
 $menu = [System.Windows.Forms.ContextMenuStrip]::new()
@@ -258,8 +314,7 @@ try {
             $macro = $macrosById[$registrationId]
             $rendered = Show-TemplateDialog -Title ([string]$macro.title) -Template ([string]$macro.text)
             if ($null -eq $rendered) { return }
-            Set-ClipboardTextWithRetry -Text $rendered
-            [System.Windows.Forms.SendKeys]::SendWait('^v')
+            Invoke-SafePaste -Text $rendered
         }
         catch {
             [System.Windows.Forms.MessageBox]::Show(
@@ -285,6 +340,10 @@ try {
     [System.Windows.Forms.Application]::Run()
 }
 finally {
+    foreach ($timer in @($script:clipboardRestoreTimers)) {
+        $timer.Stop()
+        $timer.Dispose()
+    }
     $notifyIcon.Visible = $false
     $notifyIcon.Dispose()
     $menu.Dispose()

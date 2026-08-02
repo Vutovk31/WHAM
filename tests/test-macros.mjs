@@ -17,3 +17,16 @@ for (const macro of macros) {
 }
 
 console.log('Macro and variable contract validation passed.');
+
+const script = fs.readFileSync(new URL('../WHAM.QuickReplies.ps1', import.meta.url), 'utf8');
+for (const contract of [
+  'GetDataObject()',
+  'Invoke-SafePaste',
+  'GetText() -cne $ExpectedText',
+  'SetDataObject($Snapshot, $true)',
+  'clipboardRestoreTimers',
+]) {
+  assert.ok(script.includes(contract), `Missing safe clipboard contract: ${contract}`);
+}
+
+console.log('Safe clipboard contract validation passed.');
