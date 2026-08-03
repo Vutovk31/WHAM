@@ -1,0 +1,43 @@
+name: Apply hotkey dropdown hardening
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - tools/Apply-HotkeyDropdownPatch.ps1
+      - .github/workflows/apply-hotkey-dropdown-patch.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-verify:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply editor patch
+        shell: powershell
+        run: .\tools\Apply-HotkeyDropdownPatch.ps1
+
+      - name: Verify PowerShell core
+        shell: powershell
+        run: .\WHAM.QuickReplies.ps1 -SelfTest
+
+      - name: Commit verified change
+        shell: powershell
+        run: |
+          if (-not (git status --porcelain)) {
+            Write-Host 'No patch changes to commit.'
+            exit 0
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add WHAM.QuickReplies.ps1
+          git commit -m 'fix: use dropdown hotkeys and reliable re-registration'
+          git push origin HEAD:main
