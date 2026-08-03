@@ -59,6 +59,31 @@ if (Test-Path -LiteralPath $readmeSource -PathType Leaf) {
     Copy-Item -LiteralPath $readmeSource -Destination (Join-Path $installDir 'README.md') -Force
 }
 
+# The installed shortcuts call WScript instead of the CMD launcher directly.
+# WScript starts start-wham.cmd with window style 0, so the tray process has no
+# user-closeable console window and can only be exited from the tray menu.
+$hiddenLauncherPath = Join-Path $installDir 'start-wham-hidden.vbs'
+$hiddenLauncher = @'
+Option Explicit
+Dim shell, fso, baseDir, startFile
+Set fso = CreateObject("Scripting.FileSystemObject")
+baseDir = fso.GetParentFolderName(WScript.ScriptFullName)
+startFile = fso.BuildPath(baseDir, "start-wham.cmd")
+
+If Not fso.FileExists(startFile) Then
+    MsgBox "WHAM start file was not found:" & vbCrLf & startFile, 16, "WHAM Quick Replies"
+    WScript.Quit 1
+End If
+
+Set shell = CreateObject("WScript.Shell")
+shell.CurrentDirectory = baseDir
+shell.Run "cmd.exe /d /c """ & startFile & """", 0, False
+'@
+[IO.File]::WriteAllText($hiddenLauncherPath, $hiddenLauncher, [Text.UTF8Encoding]::new($false))
+if (-not (Test-Path -LiteralPath $hiddenLauncherPath -PathType Leaf)) {
+    throw 'Hidden WHAM launcher was not created.'
+}
+
 $uninstallScript = @'
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
@@ -135,17 +160,18 @@ function New-WhamShortcut {
     $shortcut.Save()
 }
 
-$appTarget = Join-Path $installDir 'start-wham.cmd'
+$wscriptTarget = Join-Path $env:SystemRoot 'System32\wscript.exe'
+$appArguments = '"{0}"' -f $hiddenLauncherPath
 $uninstallTarget = Join-Path $installDir 'uninstall-wham.cmd'
-New-WhamShortcut -Path (Join-Path $startMenuDir 'WHAM Quick Replies.lnk') -Target $appTarget
+New-WhamShortcut -Path (Join-Path $startMenuDir 'WHAM Quick Replies.lnk') -Target $wscriptTarget -Arguments $appArguments
 New-WhamShortcut -Path (Join-Path $startMenuDir 'Удалить WHAM Quick Replies.lnk') -Target $uninstallTarget -Description 'Удалить WHAM Quick Replies'
-New-WhamShortcut -Path (Join-Path $desktopDir 'WHAM Quick Replies.lnk') -Target $appTarget
-New-WhamShortcut -Path $startupShortcut -Target $appTarget -Description 'Запускать WHAM Quick Replies вместе с Windows'
+New-WhamShortcut -Path (Join-Path $desktopDir 'WHAM Quick Replies.lnk') -Target $wscriptTarget -Arguments $appArguments
+New-WhamShortcut -Path $startupShortcut -Target $wscriptTarget -Arguments $appArguments -Description 'Запускать WHAM Quick Replies вместе с Windows'
 
-Start-Process -FilePath $appTarget -WorkingDirectory $installDir
+Start-Process -FilePath $wscriptTarget -ArgumentList $appArguments -WorkingDirectory $installDir -WindowStyle Hidden
 
 [System.Windows.Forms.MessageBox]::Show(
-    "WHAM Quick Replies установлен.`r`n`r`nПять макросов: Ctrl+Alt+1 — Ctrl+Alt+5.`r`nРедактор доступен через значок в системном трее.`r`nАвтозапуск Windows включён.`r`n`r`nПапка установки:`r`n$installDir",
+    "WHAM Quick Replies установлен.`r`n`r`nПять макросов: Ctrl+Alt+1 — Ctrl+Alt+5.`r`nРедактор доступен через значок в системном трее.`r`nАвтозапуск Windows включён.`r`nПриложение работает без консольного окна.`r`n`r`nПапка установки:`r`n$installDir",
     'WHAM Quick Replies',
     'OK',
     'Information'
