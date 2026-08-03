@@ -36,7 +36,7 @@ jobs:
           $verificationRoot = 'dist\package-verification'
 
           New-Item -ItemType Directory -Path $packageTests -Force | Out-Null
-          Copy-Item WHAM.QuickReplies.ps1, macros.json, start-wham.cmd, toggle-autostart.cmd, verify-wham.cmd, README.md -Destination $packageRoot
+          Copy-Item WHAM.QuickReplies.ps1, macros.json, start-wham.cmd, toggle-autostart.cmd, verify-wham.cmd, install-wham.cmd, uninstall-wham.cmd, README.md, BETA-TEST-INSTRUCTION.txt -Destination $packageRoot
           Copy-Item tests\Test-NotepadPaste.ps1 -Destination $packageTests
 
           $requiredFiles = @(
@@ -45,7 +45,10 @@ jobs:
             'start-wham.cmd',
             'toggle-autostart.cmd',
             'verify-wham.cmd',
+            'install-wham.cmd',
+            'uninstall-wham.cmd',
             'README.md',
+            'BETA-TEST-INSTRUCTION.txt',
             'tests\Test-NotepadPaste.ps1'
           )
           foreach ($relativePath in $requiredFiles) {
