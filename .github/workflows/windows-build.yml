@@ -27,13 +27,44 @@ jobs:
         shell: powershell
         run: .\WHAM.QuickReplies.ps1 -SelfTest
 
-      - name: Build portable package
+      - name: Build and verify portable package
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Path dist\WHAM-Quick-Replies -Force | Out-Null
-          Copy-Item WHAM.QuickReplies.ps1, macros.json, start-wham.cmd, README.md -Destination dist\WHAM-Quick-Replies
-          Compress-Archive -Path dist\WHAM-Quick-Replies -DestinationPath dist\WHAM-Quick-Replies-windows-x64.zip -Force
-          $hash = (Get-FileHash dist\WHAM-Quick-Replies-windows-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $packageRoot = 'dist\WHAM-Quick-Replies'
+          $packageTests = Join-Path $packageRoot 'tests'
+          $archivePath = 'dist\WHAM-Quick-Replies-windows-x64.zip'
+          $verificationRoot = 'dist\package-verification'
+
+          New-Item -ItemType Directory -Path $packageTests -Force | Out-Null
+          Copy-Item WHAM.QuickReplies.ps1, macros.json, start-wham.cmd, toggle-autostart.cmd, verify-wham.cmd, README.md -Destination $packageRoot
+          Copy-Item tests\Test-NotepadPaste.ps1 -Destination $packageTests
+
+          $requiredFiles = @(
+            'WHAM.QuickReplies.ps1',
+            'macros.json',
+            'start-wham.cmd',
+            'toggle-autostart.cmd',
+            'verify-wham.cmd',
+            'README.md',
+            'tests\Test-NotepadPaste.ps1'
+          )
+          foreach ($relativePath in $requiredFiles) {
+            $sourcePath = Join-Path $packageRoot $relativePath
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+              throw "Portable package is missing required file: $relativePath"
+            }
+          }
+
+          Compress-Archive -Path $packageRoot -DestinationPath $archivePath -Force
+          Expand-Archive -LiteralPath $archivePath -DestinationPath $verificationRoot -Force
+          foreach ($relativePath in $requiredFiles) {
+            $archivedPath = Join-Path (Join-Path $verificationRoot 'WHAM-Quick-Replies') $relativePath
+            if (-not (Test-Path -LiteralPath $archivedPath -PathType Leaf)) {
+              throw "Portable ZIP verification failed for: $relativePath"
+            }
+          }
+
+          $hash = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  WHAM-Quick-Replies-windows-x64.zip" | Set-Content dist\SHA256SUMS.txt -Encoding ASCII
 
       - name: Upload Windows package
