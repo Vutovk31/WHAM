@@ -1,4 +1,4 @@
-﻿#requires -version 5.1
+#requires -version 5.1
 
 param(
     [string]$MacrosPath = (Join-Path $PSScriptRoot 'macros.json'),
@@ -15,7 +15,7 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-function Show-FatalStartupError {
+function Show-FatalError {
     param([Parameter(Mandatory)][string]$Message)
 
     try {
@@ -23,24 +23,15 @@ function Show-FatalStartupError {
         Add-Content -LiteralPath (Join-Path $PSScriptRoot 'WHAM-errors.log') -Encoding UTF8 -Value "[$timestamp] $Message"
     }
     catch {
-        # A read-only folder must not hide the original startup error.
+        # Logging must never hide the original error.
     }
 
     [System.Windows.Forms.MessageBox]::Show(
         "$Message`r`n`r`nПодробности сохранены в WHAM-errors.log.",
-        'WHAM Quick Replies — ошибка запуска',
+        'WHAM Quick Replies — ошибка',
         'OK',
         'Error'
     ) | Out-Null
-}
-
-trap {
-    if ($SelfTest) {
-        [Console]::Error.WriteLine($_.Exception.ToString())
-        exit 1
-    }
-    Show-FatalStartupError -Message $_.Exception.Message
-    break
 }
 
 Add-Type -ReferencedAssemblies 'System.Windows.Forms.dll' -TypeDefinition @'
@@ -58,26 +49,55 @@ public sealed class WhamHotkeyWindow : NativeWindow, IDisposable
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int virtualKey);
+
     public event Action<int> HotkeyPressed;
 
-    public WhamHotkeyWindow() { CreateHandle(new CreateParams()); }
+    public WhamHotkeyWindow()
+    {
+        CreateHandle(new CreateParams());
+    }
 
     public void Register(int id, uint modifiers, uint key)
     {
         if (!RegisterHotKey(Handle, id, modifiers, key))
-            throw new InvalidOperationException("Hotkey registration failed for id " + id + ". Win32 error: " + Marshal.GetLastWin32Error());
+        {
+            throw new InvalidOperationException(
+                "Hotkey registration failed for id " + id + ". Win32 error: " + Marshal.GetLastWin32Error()
+            );
+        }
     }
 
-    public void Unregister(int id) { UnregisterHotKey(Handle, id); }
+    public void Unregister(int id)
+    {
+        UnregisterHotKey(Handle, id);
+    }
 
     protected override void WndProc(ref Message message)
     {
         if (message.Msg == WM_HOTKEY && HotkeyPressed != null)
+        {
             HotkeyPressed(message.WParam.ToInt32());
+        }
         base.WndProc(ref message);
     }
 
-    public void Dispose() { DestroyHandle(); }
+    public void Dispose()
+    {
+        DestroyHandle();
+    }
 }
 '@
 
@@ -85,48 +105,75 @@ function Read-Macros {
     param([Parameter(Mandatory)][string]$Path)
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Macros file not found: $Path"
+        throw "Файл макросов не найден: $Path"
     }
 
     try {
-        $parsed = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+        $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+        $parsed = $raw | ConvertFrom-Json
     }
     catch {
-        throw "Не удалось прочитать macros.json. Проверьте кавычки, запятые и фигурные скобки. $($_.Exception.Message)"
+        throw "Не удалось прочитать macros.json. Проверьте кавычки и запятые. $($_.Exception.Message)"
     }
 
     $items = @(foreach ($item in $parsed) { $item })
-    if ($items.Count -eq 0) { throw 'At least one macro is required.' }
+    if ($items.Count -eq 0) {
+        throw 'Должен существовать хотя бы один макрос.'
+    }
 
-    $seenIds = @{}
-    $seenHotkeys = @{}
+    $ids = @{}
+    $hotkeys = @{}
     foreach ($item in $items) {
         foreach ($property in 'id', 'title', 'hotkey', 'text') {
-            if (-not $item.PSObject.Properties[$property] -or [string]::IsNullOrWhiteSpace([string]$item.$property)) {
-                throw "Macro is missing required property '$property'."
+            if (-not $item.PSObject.Properties[$property]) {
+                throw "У макроса отсутствует поле '$property'."
+            }
+            if ([string]::IsNullOrWhiteSpace([string]$item.$property)) {
+                throw "Поле '$property' не может быть пустым."
             }
         }
 
         $id = ([string]$item.id).Trim()
-        if ($seenIds.ContainsKey($id)) { throw "Duplicate macro id: $id" }
-        $seenIds[$id] = $true
+        $hotkey = ([string]$item.hotkey).Trim().ToUpperInvariant()
+        if ($ids.ContainsKey($id)) {
+            throw "Повторяется id макроса: $id"
+        }
+        if ($hotkeys.ContainsKey($hotkey)) {
+            throw "Горячая клавиша '$($item.hotkey)' назначена нескольким макросам."
+        }
 
-        $normalizedHotkey = ([string]$item.hotkey).Trim().ToUpperInvariant()
-        if ($seenHotkeys.ContainsKey($normalizedHotkey)) { throw "Duplicate hotkey: $($item.hotkey)" }
-        $seenHotkeys[$normalizedHotkey] = $true
+        $ids[$id] = $true
+        $hotkeys[$hotkey] = $true
     }
 
     return $items
 }
 
-function Write-Macros {
+function ConvertTo-SerializableMacros {
+    param([Parameter(Mandatory)][Collections.IEnumerable]$Macros)
+
+    return @(
+        foreach ($macro in $Macros) {
+            [pscustomobject]@{
+                id = [string]$macro.id
+                title = [string]$macro.title
+                hotkey = [string]$macro.hotkey
+                text = [string]$macro.text
+            }
+        }
+    )
+}
+
+function Write-MacrosVerified {
     param(
         [Parameter(Mandatory)][string]$Path,
         [Parameter(Mandatory)][Collections.IEnumerable]$Macros
     )
 
-    $items = @(foreach ($macro in $Macros) { $macro })
-    if ($items.Count -eq 0) { throw 'At least one macro is required.' }
+    $items = @(ConvertTo-SerializableMacros -Macros $Macros)
+    if ($items.Count -eq 0) {
+        throw 'Нельзя сохранить пустой список макросов.'
+    }
 
     $directory = Split-Path -Parent $Path
     if ($directory -and -not (Test-Path -LiteralPath $directory -PathType Container)) {
@@ -135,15 +182,42 @@ function Write-Macros {
 
     $json = ConvertTo-Json -InputObject $items -Depth 4
     $tempPath = "$Path.tmp"
-    [IO.File]::WriteAllText($tempPath, $json, [Text.UTF8Encoding]::new($true))
-    Move-Item -LiteralPath $tempPath -Destination $Path -Force
+    $backupPath = "$Path.bak"
+
+    try {
+        [IO.File]::WriteAllText($tempPath, $json, [Text.UTF8Encoding]::new($true))
+
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            Copy-Item -LiteralPath $Path -Destination $backupPath -Force
+        }
+
+        Move-Item -LiteralPath $tempPath -Destination $Path -Force
+
+        $saved = @(Read-Macros -Path $Path)
+        $expectedJson = ConvertTo-Json -InputObject $items -Depth 4 -Compress
+        $actualJson = ConvertTo-Json -InputObject (ConvertTo-SerializableMacros -Macros $saved) -Depth 4 -Compress
+        if ($expectedJson -cne $actualJson) {
+            throw 'Проверка после записи не прошла: содержимое файла отличается от текста в редакторе.'
+        }
+    }
+    catch {
+        if (Test-Path -LiteralPath $backupPath -PathType Leaf) {
+            Copy-Item -LiteralPath $backupPath -Destination $Path -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+    finally {
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function ConvertTo-HotkeyBinding {
     param([Parameter(Mandatory)][string]$Hotkey)
 
+    # MOD_NOREPEAT prevents repeated firing while the user holds the keys.
     $modifiers = [uint32]0x4000
     $keyName = $null
+
     foreach ($part in ($Hotkey -split '\+')) {
         $token = $part.Trim().ToUpperInvariant()
         switch ($token) {
@@ -154,20 +228,26 @@ function ConvertTo-HotkeyBinding {
             'WIN'     { $modifiers = $modifiers -bor 0x0008 }
             default {
                 if ([string]::IsNullOrWhiteSpace($token)) { continue }
-                if ($keyName) { throw "Hotkey must contain exactly one key: $Hotkey" }
+                if ($keyName) {
+                    throw "В сочетании должна быть ровно одна обычная клавиша: $Hotkey"
+                }
                 $keyName = $token
             }
         }
     }
 
-    if (-not $keyName) { throw "Hotkey has no key: $Hotkey" }
-    if ($keyName -match '^[0-9]$') { $keyName = "D$keyName" }
+    if (-not $keyName) {
+        throw "В сочетании отсутствует обычная клавиша: $Hotkey"
+    }
+    if ($keyName -match '^[0-9]$') {
+        $keyName = "D$keyName"
+    }
 
     try {
         $key = [System.Enum]::Parse([System.Windows.Forms.Keys], $keyName, $true)
     }
     catch {
-        throw "Unsupported key '$keyName' in hotkey '$Hotkey'."
+        throw "Клавиша '$keyName' не поддерживается в сочетании '$Hotkey'."
     }
 
     return [pscustomobject]@{
@@ -204,6 +284,117 @@ function Expand-Template {
     return $result
 }
 
+function Show-TemplateDialog {
+    param(
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)][string]$Template
+    )
+
+    $variables = @(Get-TemplateVariables -Template $Template)
+    if ($variables.Count -eq 0) {
+        return $Template
+    }
+
+    $form = [System.Windows.Forms.Form]::new()
+    $form.Text = "WHAM — $Title"
+    $form.StartPosition = 'CenterScreen'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MinimizeBox = $false
+    $form.MaximizeBox = $false
+    $form.ShowInTaskbar = $true
+    $form.Font = [Drawing.Font]::new('Segoe UI', 10)
+
+    $inputs = @{}
+    $top = 16
+    foreach ($name in $variables) {
+        $label = [System.Windows.Forms.Label]::new()
+        $label.Text = $name.Replace('_', ' ')
+        $label.Location = [Drawing.Point]::new(16, ($top + 5))
+        $label.Size = [Drawing.Size]::new(150, 25)
+        $form.Controls.Add($label)
+
+        $input = [System.Windows.Forms.TextBox]::new()
+        $input.Location = [Drawing.Point]::new(170, $top)
+        $input.Size = [Drawing.Size]::new(370, 27)
+        $form.Controls.Add($input)
+        $inputs[$name] = $input
+        $top += 42
+    }
+
+    $previewLabel = [System.Windows.Forms.Label]::new()
+    $previewLabel.Text = 'Предпросмотр'
+    $previewLabel.Location = [Drawing.Point]::new(16, $top)
+    $previewLabel.Size = [Drawing.Size]::new(150, 24)
+    $form.Controls.Add($previewLabel)
+    $top += 25
+
+    $preview = [System.Windows.Forms.TextBox]::new()
+    $preview.Location = [Drawing.Point]::new(16, $top)
+    $preview.Size = [Drawing.Size]::new(524, 110)
+    $preview.Multiline = $true
+    $preview.ScrollBars = 'Vertical'
+    $preview.ReadOnly = $true
+    $form.Controls.Add($preview)
+    $top += 122
+
+    $insertButton = [System.Windows.Forms.Button]::new()
+    $insertButton.Text = 'Вставить'
+    $insertButton.Location = [Drawing.Point]::new(340, $top)
+    $insertButton.Size = [Drawing.Size]::new(95, 32)
+    $form.Controls.Add($insertButton)
+
+    $cancelButton = [System.Windows.Forms.Button]::new()
+    $cancelButton.Text = 'Отмена'
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $cancelButton.Location = [Drawing.Point]::new(445, $top)
+    $cancelButton.Size = [Drawing.Size]::new(95, 32)
+    $form.Controls.Add($cancelButton)
+
+    $form.ClientSize = [Drawing.Size]::new(560, ($top + 48))
+    $form.AcceptButton = $insertButton
+    $form.CancelButton = $cancelButton
+
+    $refreshPreview = {
+        $values = @{}
+        foreach ($name in $variables) {
+            $values[$name] = $inputs[$name].Text
+        }
+        $preview.Text = Expand-Template -Template $Template -Values $values
+    }
+
+    foreach ($input in $inputs.Values) {
+        $input.add_TextChanged({ & $refreshPreview })
+    }
+    & $refreshPreview
+
+    $insertButton.add_Click({
+        $empty = @($variables | Where-Object { [string]::IsNullOrWhiteSpace($inputs[$_].Text) })
+        if ($empty.Count -gt 0) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Заполните поля: $($empty -join ', ')",
+                'WHAM Quick Replies',
+                'OK',
+                'Warning'
+            ) | Out-Null
+            return
+        }
+
+        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Close()
+    })
+
+    try {
+        $inputs[$variables[0]].Focus() | Out-Null
+        if ($form.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) {
+            return $null
+        }
+        return $preview.Text
+    }
+    finally {
+        $form.Dispose()
+    }
+}
+
 function Show-MacroEditor {
     param(
         [Parameter(Mandatory)][string]$Path,
@@ -220,6 +411,13 @@ function Show-MacroEditor {
         })
     }
 
+    # A shared object is essential here. PowerShell delegate handlers use child
+    # scopes, so assigning plain $currentIndex/$loading variables loses changes.
+    $state = [pscustomobject]@{
+        Loading = $false
+        CurrentIndex = -1
+    }
+
     $form = [System.Windows.Forms.Form]::new()
     $form.Text = 'WHAM — редактор макросов'
     $form.StartPosition = 'CenterScreen'
@@ -231,7 +429,9 @@ function Show-MacroEditor {
     $list.Location = [Drawing.Point]::new(16, 16)
     $list.Size = [Drawing.Size]::new(220, 450)
     $list.Anchor = 'Top, Bottom, Left'
-    foreach ($item in $items) { [void]$list.Items.Add($item.title) }
+    foreach ($item in $items) {
+        [void]$list.Items.Add($item.title)
+    }
     $form.Controls.Add($list)
 
     $titleLabel = [System.Windows.Forms.Label]::new()
@@ -259,9 +459,9 @@ function Show-MacroEditor {
     $form.Controls.Add($hotkeyInput)
 
     $textLabel = [System.Windows.Forms.Label]::new()
-    $textLabel.Text = 'Текст макроса. Поля в {скобках} запрашиваются перед вставкой.'
+    $textLabel.Text = 'Текст макроса. Выражения в {скобках} запрашиваются перед вставкой.'
     $textLabel.Location = [Drawing.Point]::new(252, 146)
-    $textLabel.Size = [Drawing.Size]::new(520, 24)
+    $textLabel.Size = [Drawing.Size]::new(530, 24)
     $form.Controls.Add($textLabel)
 
     $textInput = [System.Windows.Forms.TextBox]::new()
@@ -303,31 +503,44 @@ function Show-MacroEditor {
     $form.Controls.Add($cancelButton)
     $form.CancelButton = $cancelButton
 
-    $loading = $false
-    $currentIndex = -1
+    $commitCurrent = {
+        $index = [int]$state.CurrentIndex
+        if ($state.Loading -or $index -lt 0 -or $index -ge $items.Count) {
+            return
+        }
 
-    $updateCurrent = {
-        if ($loading -or $currentIndex -lt 0 -or $currentIndex -ge $items.Count) { return }
-        $items[$currentIndex].title = $titleInput.Text
-        $items[$currentIndex].hotkey = $hotkeyInput.Text
-        $items[$currentIndex].text = $textInput.Text
-        $list.Items[$currentIndex] = $(if ([string]::IsNullOrWhiteSpace($titleInput.Text)) { '(без названия)' } else { $titleInput.Text })
+        $items[$index].title = [string]$titleInput.Text
+        $items[$index].hotkey = [string]$hotkeyInput.Text
+        $items[$index].text = [string]$textInput.Text
+
+        $caption = if ([string]::IsNullOrWhiteSpace($titleInput.Text)) {
+            '(без названия)'
+        }
+        else {
+            $titleInput.Text
+        }
+        if ([string]$list.Items[$index] -cne $caption) {
+            $list.Items[$index] = $caption
+        }
     }
 
     $list.add_SelectedIndexChanged({
-        if ($loading) { return }
-        $currentIndex = $list.SelectedIndex
-        $loading = $true
+        if ($state.Loading) { return }
+
+        $state.CurrentIndex = [int]$list.SelectedIndex
+        $state.Loading = $true
         try {
-            $enabled = $currentIndex -ge 0
+            $index = [int]$state.CurrentIndex
+            $enabled = $index -ge 0 -and $index -lt $items.Count
             $titleInput.Enabled = $enabled
             $hotkeyInput.Enabled = $enabled
             $textInput.Enabled = $enabled
             $deleteButton.Enabled = $enabled
+
             if ($enabled) {
-                $titleInput.Text = [string]$items[$currentIndex].title
-                $hotkeyInput.Text = [string]$items[$currentIndex].hotkey
-                $textInput.Text = [string]$items[$currentIndex].text
+                $titleInput.Text = [string]$items[$index].title
+                $hotkeyInput.Text = [string]$items[$index].hotkey
+                $textInput.Text = [string]$items[$index].text
             }
             else {
                 $titleInput.Clear()
@@ -336,115 +549,146 @@ function Show-MacroEditor {
             }
         }
         finally {
-            $loading = $false
+            $state.Loading = $false
         }
     })
 
-    $titleInput.add_TextChanged({ & $updateCurrent })
-    $hotkeyInput.add_TextChanged({ & $updateCurrent })
-    $textInput.add_TextChanged({ & $updateCurrent })
+    $titleInput.add_TextChanged({ & $commitCurrent })
+    $hotkeyInput.add_TextChanged({ & $commitCurrent })
+    $textInput.add_TextChanged({ & $commitCurrent })
 
     $addButton.add_Click({
-        $used = @{}
-        foreach ($item in $items) { $used[([string]$item.hotkey).ToUpperInvariant()] = $true }
+        try {
+            & $commitCurrent
 
-        $candidate = ''
-        foreach ($number in 1..9) {
-            $option = "Alt+$number"
-            if (-not $used.ContainsKey($option.ToUpperInvariant())) {
-                $candidate = $option
-                break
+            $used = @{}
+            foreach ($item in $items) {
+                $used[([string]$item.hotkey).Trim().ToUpperInvariant()] = $true
             }
-        }
-        if (-not $candidate) {
-            foreach ($number in 1..24) {
-                $option = "Ctrl+Alt+F$number"
+
+            $candidate = $null
+            foreach ($number in 1..9) {
+                $option = "Alt+$number"
                 if (-not $used.ContainsKey($option.ToUpperInvariant())) {
                     $candidate = $option
                     break
                 }
             }
-        }
+            if (-not $candidate) {
+                foreach ($number in 1..24) {
+                    $option = "Ctrl+Alt+F$number"
+                    if (-not $used.ContainsKey($option.ToUpperInvariant())) {
+                        $candidate = $option
+                        break
+                    }
+                }
+            }
+            if (-not $candidate) {
+                throw 'Не удалось подобрать свободное сочетание для нового макроса.'
+            }
 
-        $item = [pscustomobject]@{
-            id = "macro-$([Guid]::NewGuid().ToString('N'))"
-            title = 'Новый макрос'
-            hotkey = $candidate
-            text = 'Новый текст'
+            $newItem = [pscustomobject]@{
+                id = "macro-$([Guid]::NewGuid().ToString('N'))"
+                title = 'Новый макрос'
+                hotkey = $candidate
+                text = 'Новый текст'
+            }
+            [void]$items.Add($newItem)
+            [void]$list.Items.Add($newItem.title)
+            $list.SelectedIndex = $items.Count - 1
+            $titleInput.SelectAll()
+            $titleInput.Focus() | Out-Null
         }
-        [void]$items.Add($item)
-        [void]$list.Items.Add($item.title)
-        $list.SelectedIndex = $items.Count - 1
-        $titleInput.SelectAll()
-        $titleInput.Focus() | Out-Null
+        catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                $_.Exception.Message,
+                'WHAM Quick Replies',
+                'OK',
+                'Error'
+            ) | Out-Null
+        }
     })
 
     $deleteButton.add_Click({
-        if ($currentIndex -lt 0) { return }
-        if ($items.Count -eq 1) {
-            [System.Windows.Forms.MessageBox]::Show('Должен остаться хотя бы один макрос.', 'WHAM Quick Replies', 'OK', 'Warning') | Out-Null
-            return
+        try {
+            $index = [int]$state.CurrentIndex
+            if ($index -lt 0 -or $index -ge $items.Count) { return }
+            if ($items.Count -eq 1) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    'Должен остаться хотя бы один макрос.',
+                    'WHAM Quick Replies',
+                    'OK',
+                    'Warning'
+                ) | Out-Null
+                return
+            }
+
+            $answer = [System.Windows.Forms.MessageBox]::Show(
+                "Удалить макрос '$($items[$index].title)'?",
+                'WHAM Quick Replies',
+                'YesNo',
+                'Question'
+            )
+            if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+            $items.RemoveAt($index)
+            $list.Items.RemoveAt($index)
+            $state.CurrentIndex = -1
+            $list.SelectedIndex = [Math]::Min($index, $items.Count - 1)
         }
-
-        $answer = [System.Windows.Forms.MessageBox]::Show(
-            "Удалить макрос '$($items[$currentIndex].title)'?",
-            'WHAM Quick Replies',
-            'YesNo',
-            'Question'
-        )
-        if ($answer -ne [System.Windows.Forms.DialogResult]::Yes) { return }
-
-        $removeIndex = $currentIndex
-        $items.RemoveAt($removeIndex)
-        $list.Items.RemoveAt($removeIndex)
-        $list.SelectedIndex = [Math]::Min($removeIndex, $items.Count - 1)
+        catch {
+            [System.Windows.Forms.MessageBox]::Show(
+                $_.Exception.Message,
+                'WHAM Quick Replies',
+                'OK',
+                'Error'
+            ) | Out-Null
+        }
     })
 
     $saveButton.add_Click({
-        & $updateCurrent
-        $seen = @{}
-
-        for ($index = 0; $index -lt $items.Count; $index++) {
-            $item = $items[$index]
-            if ([string]::IsNullOrWhiteSpace([string]$item.title) -or
-                [string]::IsNullOrWhiteSpace([string]$item.hotkey) -or
-                [string]::IsNullOrWhiteSpace([string]$item.text)) {
-                $list.SelectedIndex = $index
-                [System.Windows.Forms.MessageBox]::Show(
-                    'Заполните название, горячую клавишу и текст.',
-                    'WHAM Quick Replies',
-                    'OK',
-                    'Warning'
-                ) | Out-Null
-                return
-            }
-
-            $item.title = ([string]$item.title).Trim()
-            $item.hotkey = ([string]$item.hotkey).Trim()
-            [void](ConvertTo-HotkeyBinding -Hotkey $item.hotkey)
-
-            $normalized = $item.hotkey.ToUpperInvariant()
-            if ($seen.ContainsKey($normalized)) {
-                $list.SelectedIndex = $index
-                [System.Windows.Forms.MessageBox]::Show(
-                    "Горячая клавиша '$($item.hotkey)' назначена нескольким макросам.",
-                    'WHAM Quick Replies',
-                    'OK',
-                    'Warning'
-                ) | Out-Null
-                return
-            }
-            $seen[$normalized] = $true
-        }
-
         try {
-            Write-Macros -Path $Path -Macros $items
+            # Explicitly copy the visible controls before validation. This is a
+            # second safeguard even if a TextChanged event was skipped by WinForms.
+            & $commitCurrent
+
+            $seenIds = @{}
+            $seenHotkeys = @{}
+            for ($index = 0; $index -lt $items.Count; $index++) {
+                $item = $items[$index]
+                if ([string]::IsNullOrWhiteSpace([string]$item.title) -or
+                    [string]::IsNullOrWhiteSpace([string]$item.hotkey) -or
+                    [string]::IsNullOrWhiteSpace([string]$item.text)) {
+                    $list.SelectedIndex = $index
+                    throw 'Заполните название, горячую клавишу и текст.'
+                }
+
+                $item.title = ([string]$item.title).Trim()
+                $item.hotkey = ([string]$item.hotkey).Trim()
+                [void](ConvertTo-HotkeyBinding -Hotkey $item.hotkey)
+
+                $id = ([string]$item.id).Trim()
+                $normalizedHotkey = $item.hotkey.ToUpperInvariant()
+                if ($seenIds.ContainsKey($id)) {
+                    throw "Повторяется id макроса: $id"
+                }
+                if ($seenHotkeys.ContainsKey($normalizedHotkey)) {
+                    $list.SelectedIndex = $index
+                    throw "Горячая клавиша '$($item.hotkey)' назначена нескольким макросам."
+                }
+                $seenIds[$id] = $true
+                $seenHotkeys[$normalizedHotkey] = $true
+            }
+
+            Write-MacrosVerified -Path $Path -Macros $items
+
             [System.Windows.Forms.MessageBox]::Show(
-                'Макросы сохранены. WHAM перезапустится и сразу применит новый текст и сочетания.',
+                "Макросы сохранены и проверены.`r`n`r`nФайл:`r`n$Path`r`n`r`nWHAM сейчас перезапустится.",
                 'WHAM Quick Replies',
                 'OK',
                 'Information'
             ) | Out-Null
+
             $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
             $form.Close()
         }
@@ -459,7 +703,9 @@ function Show-MacroEditor {
     })
 
     try {
-        if ($items.Count -gt 0) { $list.SelectedIndex = 0 }
+        if ($items.Count -gt 0) {
+            $list.SelectedIndex = 0
+        }
         return $form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK
     }
     finally {
@@ -467,106 +713,22 @@ function Show-MacroEditor {
     }
 }
 
-function Show-TemplateDialog {
-    param(
-        [Parameter(Mandatory)][string]$Title,
-        [Parameter(Mandatory)][string]$Template
-    )
+function Wait-ModifierKeysReleased {
+    param([int]$TimeoutMilliseconds = 1500)
 
-    $variables = @(Get-TemplateVariables -Template $Template)
-    if ($variables.Count -eq 0) { return $Template }
+    $virtualKeys = @(0x10, 0x11, 0x12, 0x5B, 0x5C) # Shift, Ctrl, Alt, Win
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
 
-    $form = [System.Windows.Forms.Form]::new()
-    $form.Text = "WHAM — $Title"
-    $form.StartPosition = 'CenterScreen'
-    $form.FormBorderStyle = 'FixedDialog'
-    $form.MinimizeBox = $false
-    $form.MaximizeBox = $false
-    $form.ShowInTaskbar = $true
-    $form.ClientSize = [Drawing.Size]::new(560, (190 + [Math]::Min($variables.Count, 6) * 44))
-    $form.Font = [Drawing.Font]::new('Segoe UI', 10)
-
-    $inputs = @{}
-    $top = 16
-    foreach ($name in $variables) {
-        $label = [System.Windows.Forms.Label]::new()
-        $label.Text = $name.Replace('_', ' ')
-        $label.Location = [Drawing.Point]::new(16, ($top + 5))
-        $label.Size = [Drawing.Size]::new(155, 25)
-        $form.Controls.Add($label)
-
-        $input = [System.Windows.Forms.TextBox]::new()
-        $input.Location = [Drawing.Point]::new(175, $top)
-        $input.Size = [Drawing.Size]::new(365, 27)
-        $form.Controls.Add($input)
-        $inputs[$name] = $input
-        $top += 44
-    }
-
-    $previewLabel = [System.Windows.Forms.Label]::new()
-    $previewLabel.Text = 'Предпросмотр'
-    $previewLabel.Location = [Drawing.Point]::new(16, $top)
-    $previewLabel.Size = [Drawing.Size]::new(150, 24)
-    $form.Controls.Add($previewLabel)
-    $top += 25
-
-    $preview = [System.Windows.Forms.TextBox]::new()
-    $preview.Location = [Drawing.Point]::new(16, $top)
-    $preview.Size = [Drawing.Size]::new(524, 90)
-    $preview.Multiline = $true
-    $preview.ScrollBars = 'Vertical'
-    $preview.ReadOnly = $true
-    $form.Controls.Add($preview)
-    $top += 102
-
-    $insertButton = [System.Windows.Forms.Button]::new()
-    $insertButton.Text = 'Вставить'
-    $insertButton.Location = [Drawing.Point]::new(340, $top)
-    $insertButton.Size = [Drawing.Size]::new(95, 32)
-    $form.Controls.Add($insertButton)
-
-    $cancelButton = [System.Windows.Forms.Button]::new()
-    $cancelButton.Text = 'Отмена'
-    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-    $cancelButton.Location = [Drawing.Point]::new(445, $top)
-    $cancelButton.Size = [Drawing.Size]::new(95, 32)
-    $form.Controls.Add($cancelButton)
-
-    $form.ClientSize = [Drawing.Size]::new(560, ($top + 48))
-    $form.AcceptButton = $insertButton
-    $form.CancelButton = $cancelButton
-
-    $refreshPreview = {
-        $values = @{}
-        foreach ($name in $variables) { $values[$name] = $inputs[$name].Text }
-        $preview.Text = Expand-Template -Template $Template -Values $values
-    }
-
-    foreach ($input in $inputs.Values) { $input.add_TextChanged({ & $refreshPreview }) }
-    & $refreshPreview
-
-    $insertButton.add_Click({
-        $empty = @($variables | Where-Object { [string]::IsNullOrWhiteSpace($inputs[$_].Text) })
-        if ($empty.Count -gt 0) {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Заполните поля: $($empty -join ', ')",
-                'WHAM Quick Replies',
-                'OK',
-                'Warning'
-            ) | Out-Null
-            return
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $pressed = $false
+        foreach ($virtualKey in $virtualKeys) {
+            if (([WhamHotkeyWindow]::GetAsyncKeyState($virtualKey) -band 0x8000) -ne 0) {
+                $pressed = $true
+                break
+            }
         }
-        $form.DialogResult = [System.Windows.Forms.DialogResult]::OK
-        $form.Close()
-    })
-
-    try {
-        if ($inputs.Count -gt 0) { $inputs[$variables[0]].Focus() | Out-Null }
-        if ($form.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
-        return $preview.Text
-    }
-    finally {
-        $form.Dispose()
+        if (-not $pressed) { return }
+        Start-Sleep -Milliseconds 25
     }
 }
 
@@ -574,7 +736,7 @@ function Set-ClipboardTextWithRetry {
     param([Parameter(Mandatory)][string]$Text)
 
     $lastError = $null
-    foreach ($attempt in 1..8) {
+    foreach ($attempt in 1..10) {
         try {
             [System.Windows.Forms.Clipboard]::SetText($Text)
             return
@@ -584,7 +746,7 @@ function Set-ClipboardTextWithRetry {
             Start-Sleep -Milliseconds 80
         }
     }
-    throw "Could not access the clipboard: $lastError"
+    throw "Не удалось записать текст в буфер обмена: $lastError"
 }
 
 function Restore-ClipboardSnapshot {
@@ -605,12 +767,15 @@ function Restore-ClipboardSnapshot {
         }
     }
     catch {
-        # Clipboard ownership can change at any time. A failed restore must never crash WHAM.
+        # Clipboard ownership may change at any time; restoration is best-effort.
     }
 }
 
 function Invoke-SafePaste {
-    param([Parameter(Mandatory)][string]$Text)
+    param(
+        [Parameter(Mandatory)][string]$Text,
+        [IntPtr]$TargetWindow
+    )
 
     $snapshot = $null
     try {
@@ -621,7 +786,13 @@ function Invoke-SafePaste {
     }
 
     Set-ClipboardTextWithRetry -Text $Text
-    Start-Sleep -Milliseconds 250
+
+    if ($TargetWindow -ne [IntPtr]::Zero -and [WhamHotkeyWindow]::IsWindow($TargetWindow)) {
+        [void][WhamHotkeyWindow]::SetForegroundWindow($TargetWindow)
+    }
+
+    Wait-ModifierKeysReleased
+    Start-Sleep -Milliseconds 120
 
     try {
         [System.Windows.Forms.SendKeys]::SendWait('^v')
@@ -631,7 +802,7 @@ function Invoke-SafePaste {
         throw
     }
 
-    Start-Sleep -Milliseconds 700
+    Start-Sleep -Milliseconds 650
     Restore-ClipboardSnapshot -Snapshot $snapshot -ExpectedText $Text
 }
 
@@ -642,38 +813,48 @@ function Find-MacroById {
     )
 
     foreach ($macro in $Macros) {
-        if ([string]$macro.id -ceq $Id) { return $macro }
+        if ([string]$macro.id -ceq $Id) {
+            return $macro
+        }
     }
     return $null
 }
 
 if ($SelfTest) {
     $testMacros = @(Read-Macros -Path $MacrosPath)
-    if ($testMacros.Count -ne 5) { throw "Self-test expected 5 macros, got $($testMacros.Count)." }
+    if ($testMacros.Count -ne 5) {
+        throw "Self-test expected 5 macros, got $($testMacros.Count)."
+    }
 
     $variables = @(Get-TemplateVariables -Template 'Добрый день, {имя}! Заказ №{номер}.')
-    if (($variables -join ',') -ne 'имя,номер') { throw 'Variable extraction self-test failed.' }
+    if (($variables -join ',') -ne 'имя,номер') {
+        throw 'Variable extraction self-test failed.'
+    }
 
-    $noVariables = @(Get-TemplateVariables -Template 'Текст без переменных')
-    if ($noVariables.Count -ne 0) { throw 'Plain-text macro self-test failed.' }
-
-    $rendered = Expand-Template -Template 'Добрый день, {имя}!' -Values @{ 'имя' = 'Тест' }
-    if ($rendered -ne 'Добрый день, Тест!') { throw 'Template expansion self-test failed.' }
+    $plainVariables = @(Get-TemplateVariables -Template 'Текст без переменных')
+    if ($plainVariables.Count -ne 0) {
+        throw 'Plain-text macro self-test failed.'
+    }
 
     $altBinding = ConvertTo-HotkeyBinding -Hotkey 'Alt+1'
-    if (($altBinding.Modifiers -band 0x0001) -eq 0) { throw 'Alt+1 parsing self-test failed.' }
+    if (($altBinding.Modifiers -band 0x0001) -eq 0) {
+        throw 'Alt+1 parsing self-test failed.'
+    }
 
     $roundTripPath = Join-Path ([IO.Path]::GetTempPath()) "wham-$([Guid]::NewGuid().ToString('N')).json"
     try {
-        Write-Macros -Path $roundTripPath -Macros $testMacros
+        $copy = @(ConvertTo-SerializableMacros -Macros $testMacros)
+        $copy[0].text = 'Проверка сохранения без переменных'
+        Write-MacrosVerified -Path $roundTripPath -Macros $copy
         $roundTrip = @(Read-Macros -Path $roundTripPath)
-        if ($roundTrip.Count -ne 5 -or $roundTrip[0].text -cne $testMacros[0].text) {
-            throw 'Macro editor storage self-test failed.'
+        if ($roundTrip[0].text -cne 'Проверка сохранения без переменных') {
+            throw 'Verified macro storage self-test failed.'
         }
     }
     finally {
         Remove-Item -LiteralPath $roundTripPath -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath "$roundTripPath.tmp" -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath "$roundTripPath.bak" -Force -ErrorAction SilentlyContinue
     }
 
     $binding = ConvertTo-HotkeyBinding -Hotkey 'Ctrl+Alt+F24'
@@ -687,6 +868,19 @@ if ($SelfTest) {
     }
 
     Write-Output 'WHAM Windows self-test passed.'
+    exit 0
+}
+
+$createdNew = $false
+$mutex = [Threading.Mutex]::new($true, 'Local\WHAM.QuickReplies', [ref]$createdNew)
+if (-not $createdNew) {
+    [System.Windows.Forms.MessageBox]::Show(
+        'WHAM Quick Replies уже запущен. Найдите его значок рядом с часами.',
+        'WHAM Quick Replies',
+        'OK',
+        'Information'
+    ) | Out-Null
+    $mutex.Dispose()
     exit 0
 }
 
@@ -706,7 +900,7 @@ try {
             $hotkeyWindow.Register($registrationId, $binding.Modifiers, $binding.Key)
         }
         catch {
-            throw "Не удалось назначить '$($macros[$index].hotkey)' макросу '$($macros[$index].title)'. Сочетание занято другой программой или Windows. Измените hotkey и перезапустите WHAM. $($_.Exception.Message)"
+            throw "Не удалось назначить '$($macros[$index].hotkey)' макросу '$($macros[$index].title)'. Сочетание занято Windows или другой программой. $($_.Exception.Message)"
         }
 
         $registeredIds.Add($registrationId)
@@ -717,16 +911,17 @@ try {
         param([int]$registrationId)
 
         try {
+            $targetWindow = [WhamHotkeyWindow]::GetForegroundWindow()
             $latestMacros = @(Read-Macros -Path $MacrosPath)
             $macroId = [string]$macroIdsByRegistration[$registrationId]
             $macro = Find-MacroById -Macros $latestMacros -Id $macroId
             if ($null -eq $macro) {
-                throw "Макрос '$macroId' больше не найден. Перезапустите WHAM."
+                throw "Макрос '$macroId' не найден. Перезапустите WHAM."
             }
 
             $rendered = Show-TemplateDialog -Title ([string]$macro.title) -Template ([string]$macro.text)
             if ($null -eq $rendered) { return }
-            Invoke-SafePaste -Text $rendered
+            Invoke-SafePaste -Text $rendered -TargetWindow $targetWindow
         }
         catch {
             [System.Windows.Forms.MessageBox]::Show(
@@ -770,22 +965,43 @@ try {
 
     $menu.Items.Add('-') | Out-Null
     $exitItem = $menu.Items.Add('Выход')
-    $exitItem.add_Click({ [System.Windows.Forms.Application]::Exit() })
+    $exitItem.add_Click({
+        [System.Windows.Forms.Application]::Exit()
+    })
 
     $notifyIcon.Icon = [System.Drawing.SystemIcons]::Information
     $notifyIcon.Text = 'WHAM Quick Replies'
     $notifyIcon.ContextMenuStrip = $menu
     $notifyIcon.Visible = $true
-    $notifyIcon.ShowBalloonTip(2500, 'WHAM Quick Replies', "$($macros.Count) макросов активны.", 'Info')
+    $notifyIcon.ShowBalloonTip(
+        2500,
+        'WHAM Quick Replies',
+        "$($macros.Count) макросов активны. Редактор доступен по правому клику.",
+        'Info'
+    )
 
     [System.Windows.Forms.Application]::Run()
+}
+catch {
+    Show-FatalError -Message $_.Exception.Message
 }
 finally {
     $notifyIcon.Visible = $false
     $notifyIcon.Dispose()
     $menu.Dispose()
-    foreach ($id in $registeredIds) { $hotkeyWindow.Unregister($id) }
+
+    foreach ($id in $registeredIds) {
+        $hotkeyWindow.Unregister($id)
+    }
     $hotkeyWindow.Dispose()
+
+    try {
+        $mutex.ReleaseMutex()
+    }
+    catch {
+        # The mutex may not be owned after an early startup failure.
+    }
+    $mutex.Dispose()
 }
 
 if ($script:restartRequested) {
