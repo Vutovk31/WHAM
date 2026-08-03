@@ -161,8 +161,7 @@ function New-WhamShortcut {
 }
 
 $wscriptTarget = Join-Path $env:SystemRoot 'System32\wscript.exe'
-$appArguments = '"{0}"' -f $hiddenLauncherPath
-$appArguments = $appArguments.Replace('\"', '"')
+$appArguments = [char]34 + $hiddenLauncherPath + [char]34
 $uninstallTarget = Join-Path $installDir 'uninstall-wham.cmd'
 New-WhamShortcut -Path (Join-Path $startMenuDir 'WHAM Quick Replies.lnk') -Target $wscriptTarget -Arguments $appArguments
 New-WhamShortcut -Path (Join-Path $startMenuDir 'Удалить WHAM Quick Replies.lnk') -Target $uninstallTarget -Description 'Удалить WHAM Quick Replies'
