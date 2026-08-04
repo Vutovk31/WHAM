@@ -24,6 +24,15 @@ jobs:
       - name: Validate beta contracts
         run: node tests/test-macros.mjs
 
+      - name: Prepare UTF-8 BOM for Windows PowerShell 5.1
+        shell: pwsh
+        run: |
+          $utf8Bom = [System.Text.UTF8Encoding]::new($true)
+          foreach ($path in @('WHAM.QuickReplies.ps1', 'tests\Test-Macros.ps1')) {
+            $text = [System.IO.File]::ReadAllText($path, [System.Text.UTF8Encoding]::new($false, $true))
+            [System.IO.File]::WriteAllText($path, $text, $utf8Bom)
+          }
+
       - name: Validate macros with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-Macros.ps1
