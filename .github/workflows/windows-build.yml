@@ -1,33 +1,38 @@
-name: Windows build
+name: Windows beta validation
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - 'stabilize/**'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  test-and-package:
+  validate-and-package:
     runs-on: windows-latest
     timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate macro contracts
+      - name: Validate beta contracts
         run: node tests/test-macros.mjs
 
-      - name: Validate macros with Windows PowerShell
+      - name: Validate macros with Windows PowerShell 5.1
         shell: powershell
         run: .\tests\Test-Macros.ps1
 
-      - name: Run Windows self-test
-        shell: powershell
-        run: .\WHAM.QuickReplies.ps1 -SelfTest
+      - name: Run deterministic application self-test
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File WHAM.QuickReplies.ps1 -SelfTest
 
-      - name: Build and verify portable package
+      - name: Build and verify portable beta package
         shell: powershell
         run: |
           $packageRoot = 'dist\WHAM-Quick-Replies'
@@ -51,6 +56,7 @@ jobs:
             'BETA-TEST-INSTRUCTION.txt',
             'tests\Test-NotepadPaste.ps1'
           )
+
           foreach ($relativePath in $requiredFiles) {
             $sourcePath = Join-Path $packageRoot $relativePath
             if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
@@ -60,6 +66,7 @@ jobs:
 
           Compress-Archive -Path $packageRoot -DestinationPath $archivePath -Force
           Expand-Archive -LiteralPath $archivePath -DestinationPath $verificationRoot -Force
+
           foreach ($relativePath in $requiredFiles) {
             $archivedPath = Join-Path (Join-Path $verificationRoot 'WHAM-Quick-Replies') $relativePath
             if (-not (Test-Path -LiteralPath $archivedPath -PathType Leaf)) {
@@ -70,7 +77,7 @@ jobs:
           $hash = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  WHAM-Quick-Replies-windows-x64.zip" | Set-Content dist\SHA256SUMS.txt -Encoding ASCII
 
-      - name: Upload Windows package
+      - name: Upload Windows beta package
         uses: actions/upload-artifact@v4
         with:
           name: WHAM-Quick-Replies-windows-x64
