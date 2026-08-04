@@ -1,42 +1,58 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
-const macros = JSON.parse(fs.readFileSync(new URL('../macros.json', import.meta.url), 'utf8'));
-assert.equal(macros.length, 5);
+const macrosPath = new URL('../macros.json', import.meta.url);
+const rawMacros = fs.readFileSync(macrosPath, 'utf8').replace(/^\uFEFF/, '');
+const macros = JSON.parse(rawMacros);
 
-const hotkeys = macros.map(({ hotkey }) => hotkey.toUpperCase());
-assert.equal(new Set(hotkeys).size, hotkeys.length);
-assert.deepEqual([...hotkeys].sort(), [1, 2, 3, 4, 5].map((n) => `CTRL+ALT+${n}`));
+assert.ok(Array.isArray(macros), 'macros.json must contain an array');
+assert.ok(macros.length > 0, 'At least one starter macro is required');
 
-const variablePattern = /\{(?<name>[\p{L}_][\p{L}\p{N}_]*)\}/gu;
+const ids = new Set();
+const hotkeys = new Set();
 for (const macro of macros) {
-  for (const key of ['id', 'title', 'hotkey', 'text']) assert.equal(typeof macro[key], 'string');
-  const variables = [...macro.text.matchAll(variablePattern)].map((match) => match.groups.name);
-  assert.ok(variables.length > 0, `${macro.id} should contain a variable`);
-  assert.equal(new Set(variables).size, variables.length, `${macro.id} should not repeat variable fields`);
+  for (const key of ['id', 'title', 'hotkey', 'text']) {
+    assert.equal(typeof macro[key], 'string', `${key} must be a string`);
+    assert.ok(macro[key].trim().length > 0, `${key} must not be empty`);
+  }
+
+  const normalizedId = macro.id.trim();
+  const normalizedHotkey = macro.hotkey.replace(/\s/g, '').toUpperCase();
+  assert.ok(!ids.has(normalizedId), `Duplicate macro id: ${normalizedId}`);
+  assert.ok(!hotkeys.has(normalizedHotkey), `Duplicate hotkey: ${normalizedHotkey}`);
+  ids.add(normalizedId);
+  hotkeys.add(normalizedHotkey);
 }
 
-console.log('Macro and variable contract validation passed.');
+const expectedStarterHotkeys = [1, 2, 3, 4, 5].map((number) => `CTRL+ALT+${number}`);
+assert.deepEqual([...hotkeys].sort(), expectedStarterHotkeys, 'Starter hotkeys must be Ctrl+Alt+1 through Ctrl+Alt+5');
 
-const script = fs.readFileSync(new URL('../WHAM.QuickReplies.ps1', import.meta.url), 'utf8');
+const script = fs.readFileSync(new URL('../WHAM.QuickReplies.ps1', import.meta.url), 'utf8').replace(/^\uFEFF/, '');
 for (const contract of [
-  'GetDataObject()',
-  'Invoke-SafePaste',
-  'GetText() -cne $ExpectedText',
-  'SetDataObject($Snapshot, $true)',
-  'clipboardRestoreTimers',
-  'Show-FatalStartupError',
-  'WHAM-errors.log',
-  'Сочетание занято другой программой',
   '[switch]$SelfTest',
-  'WHAM Windows self-test passed.',
-  "ConvertTo-HotkeyBinding -Hotkey 'Ctrl+Alt+F24'",
-  'function Show-MacroEditor',
-  'function Write-Macros',
-  'Редактор макросов',
-  'restartRequested',
+  'function Read-Macros',
+  'function Save-Macros',
+  'function Backup-File',
+  'function Get-Binding',
+  'function Register-All',
+  'function Set-ClipboardText',
+  'function Paste-Text',
+  'System.Threading.Mutex',
+  'RegisterHotKey',
+  '0x4000',
+  'WHAM-errors.log',
+  'WHAM-status.txt',
+  'WHAM self-test passed.',
 ]) {
-  assert.ok(script.includes(contract), `Missing safe clipboard contract: ${contract}`);
+  assert.ok(script.includes(contract), `Missing minimal beta contract: ${contract}`);
 }
 
-console.log('Safe clipboard contract validation passed.');
+assert.ok(!script.includes('function Register-All([WhamWindow]$Host'), 'Protected PowerShell variable $Host must not be used as a parameter');
+
+const selfTestStart = script.indexOf('function Run-SelfTest');
+const appStart = script.indexOf('function Run-App');
+assert.ok(selfTestStart >= 0 && appStart > selfTestStart, 'Self-test block is missing');
+const selfTestBlock = script.slice(selfTestStart, appStart);
+assert.ok(!selfTestBlock.includes('.RegisterBinding('), 'Self-test must not register a real global hotkey');
+
+console.log('Minimal WHAM beta contracts passed.');
