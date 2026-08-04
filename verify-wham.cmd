@@ -26,7 +26,7 @@ if not exist "%WHAM_PASTE_TEST%" (
     goto failed
 )
 
-echo [1/2] Checking macros, WinForms and global hotkey registration...
+echo [1/2] Checking macros, Unicode storage and hotkey definitions...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -File "%WHAM_SCRIPT%" -MacrosPath "%WHAM_MACROS%" -SelfTest
 if errorlevel 1 goto failed
 
@@ -37,8 +37,9 @@ if errorlevel 1 goto failed
 
 echo.
 echo WHAM VERIFICATION PASSED.
-echo Confirmed: macro storage, template expansion, global hotkey registration,
-echo WinForms startup and Unicode multiline paste into Notepad.
+echo Confirmed: macro JSON loading and migration, Unicode multiline storage,
+echo hotkey definition validation, WinForms startup and paste into Notepad.
+echo Global hotkey registration in the running tray app must still be checked manually.
 echo.
 pause
 exit /b 0
