@@ -73,14 +73,20 @@ jobs:
             }
           }
 
-          Compress-Archive -Path $packageRoot -DestinationPath $archivePath -Force
+          # Archive the package contents, not the containing directory. When the
+          # user opens the ZIP, launchers and macros.json must be visible at once.
+          Compress-Archive -Path (Join-Path $packageRoot '*') -DestinationPath $archivePath -Force
           Expand-Archive -LiteralPath $archivePath -DestinationPath $verificationRoot -Force
 
           foreach ($relativePath in $requiredFiles) {
-            $archivedPath = Join-Path (Join-Path $verificationRoot 'WHAM-Quick-Replies') $relativePath
+            $archivedPath = Join-Path $verificationRoot $relativePath
             if (-not (Test-Path -LiteralPath $archivedPath -PathType Leaf)) {
-              throw "Portable ZIP verification failed for: $relativePath"
+              throw "Flat portable ZIP verification failed for: $relativePath"
             }
+          }
+
+          if (Test-Path -LiteralPath (Join-Path $verificationRoot 'WHAM-Quick-Replies') -PathType Container) {
+            throw 'Portable ZIP must not contain a redundant top-level WHAM-Quick-Replies folder.'
           }
 
           $hash = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
