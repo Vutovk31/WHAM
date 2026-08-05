@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>WHAM Quick Replies</AssemblyName>
     <RootNamespace>WHAM.QuickReplies.Native</RootNamespace>
+    <StartupObject>WHAM.QuickReplies.Native.NativeProgram</StartupObject>
     <Version>0.10.0</Version>
     <FileVersion>0.10.0.0</FileVersion>
     <AssemblyVersion>0.10.0.0</AssemblyVersion>
@@ -17,6 +18,10 @@
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="Program.cs" />
+  </ItemGroup>
 
   <ItemGroup>
     <Content Include="macros.json">
