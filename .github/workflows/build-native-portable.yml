@@ -107,6 +107,42 @@ jobs:
             throw "Forbidden script files found: $($forbidden.FullName -join ', ')"
           }
 
+      - name: Smoke-test published executable startup
+        shell: pwsh
+        run: |
+          $publishDirectory = (Resolve-Path -LiteralPath "native-publish").Path
+          $executable = Join-Path $publishDirectory "WHAM Quick Replies.exe"
+          $errorLog = Join-Path $publishDirectory "WHAM-errors.log"
+          Remove-Item -LiteralPath $errorLog -Force -ErrorAction SilentlyContinue
+
+          $process = Start-Process `
+            -FilePath $executable `
+            -WorkingDirectory $publishDirectory `
+            -PassThru
+
+          try {
+            Start-Sleep -Seconds 5
+            $process.Refresh()
+            if ($process.HasExited) {
+              $details = if (Test-Path -LiteralPath $errorLog) {
+                Get-Content -LiteralPath $errorLog -Raw
+              } else {
+                "No WHAM-errors.log was produced."
+              }
+              throw "Published executable exited during startup smoke test. Exit code: $($process.ExitCode). $details"
+            }
+          }
+          finally {
+            if (-not $process.HasExited) {
+              $process.Kill($true)
+              $process.WaitForExit(5000) | Out-Null
+            }
+          }
+
+          if (Test-Path -LiteralPath $errorLog) {
+            throw "Published executable produced WHAM-errors.log during startup smoke test: $(Get-Content -LiteralPath $errorLog -Raw)"
+          }
+
       - name: Create versioned ZIP and SHA256
         shell: pwsh
         run: |
