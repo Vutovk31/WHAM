@@ -20,6 +20,50 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate native source safety and version
+        shell: pwsh
+        run: |
+          $source = "src/WHAM.QuickReplies.Native"
+          $expectedVersion = "0.10.0-native-test1"
+
+          $forbiddenFiles = Get-ChildItem -LiteralPath $source -Recurse -File |
+            Where-Object { $_.Extension -in @('.cmd', '.bat', '.ps1', '.vbs') }
+          if ($forbiddenFiles) {
+            throw "Forbidden script files found in native source: $($forbiddenFiles.FullName -join ', ')"
+          }
+
+          $forbiddenPatterns = @(
+            'ExecutionPolicy Bypass',
+            'Invoke-Expression',
+            'WScript.Shell',
+            'Start-Process -WindowStyle Hidden',
+            'Stop-Process -Force'
+          )
+          $sourceText = Get-ChildItem -LiteralPath $source -Recurse -File |
+            Where-Object { $_.Extension -in @('.cs', '.csproj', '.json', '.txt', '.manifest') } |
+            ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }
+          foreach ($pattern in $forbiddenPatterns) {
+            if ($sourceText -match [Regex]::Escape($pattern)) {
+              throw "Forbidden launcher or process-control pattern found: $pattern"
+            }
+          }
+
+          $versionFile = (Get-Content -LiteralPath "$source/VERSION.txt" -Raw).Trim()
+          if ($versionFile -ne $expectedVersion) {
+            throw "VERSION.txt mismatch: expected '$expectedVersion', found '$versionFile'"
+          }
+
+          $nativeApp = Get-Content -LiteralPath "$source/NativeApp.cs" -Raw
+          if ($nativeApp -notmatch [Regex]::Escape("Version = `"$expectedVersion`"")) {
+            throw "NativeApp.cs does not expose version '$expectedVersion'"
+          }
+
+          [xml]$project = Get-Content -LiteralPath "$source/WHAM.QuickReplies.Native.csproj" -Raw
+          $assemblyVersion = [string]$project.Project.PropertyGroup.Version
+          if ($assemblyVersion -ne '0.10.0') {
+            throw "Project assembly version mismatch: expected '0.10.0', found '$assemblyVersion'"
+          }
+
       - name: Set up .NET 8
         uses: actions/setup-dotnet@v4
         with:
