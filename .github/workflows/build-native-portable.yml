@@ -1,0 +1,88 @@
+name: Build native portable WHAM
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/WHAM.QuickReplies.Native/**"
+      - ".github/workflows/build-native-portable.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore src/WHAM.QuickReplies.Native/WHAM.QuickReplies.Native.csproj
+
+      - name: Build
+        run: dotnet build src/WHAM.QuickReplies.Native/WHAM.QuickReplies.Native.csproj --configuration Release --no-restore
+
+      - name: Publish self-contained Windows x64
+        run: >-
+          dotnet publish src/WHAM.QuickReplies.Native/WHAM.QuickReplies.Native.csproj
+          --configuration Release
+          --runtime win-x64
+          --self-contained true
+          --no-restore
+          -p:PublishSingleFile=true
+          -p:DebugType=None
+          -p:DebugSymbols=false
+          --output native-publish
+
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          $required = @(
+            "native-publish/WHAM Quick Replies.exe",
+            "native-publish/macros.json",
+            "native-publish/README-FIRST.txt",
+            "native-publish/VERSION.txt"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Required package file is missing: $path"
+            }
+          }
+          $forbidden = Get-ChildItem -LiteralPath native-publish -Recurse -File |
+            Where-Object { $_.Extension -in @('.cmd', '.bat', '.ps1', '.vbs') }
+          if ($forbidden) {
+            throw "Forbidden script files found: $($forbidden.FullName -join ', ')"
+          }
+
+      - name: Create versioned ZIP and SHA256
+        shell: pwsh
+        run: |
+          $package = "WHAM_Quick_Replies_v0.10.0-native-test1_win-x64"
+          $folder = Join-Path $PWD $package
+          New-Item -ItemType Directory -Path $folder -Force | Out-Null
+          Copy-Item -LiteralPath "native-publish/WHAM Quick Replies.exe" -Destination $folder
+          Copy-Item -LiteralPath "native-publish/macros.json" -Destination $folder
+          Copy-Item -LiteralPath "native-publish/README-FIRST.txt" -Destination $folder
+          Copy-Item -LiteralPath "native-publish/VERSION.txt" -Destination $folder
+          Compress-Archive -LiteralPath $folder -DestinationPath "$package.zip" -CompressionLevel Optimal
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "$package.zip").Hash.ToLowerInvariant()
+          Set-Content -LiteralPath "$package.zip.sha256.txt" -Value "$hash  $package.zip" -Encoding ascii
+
+      - name: Upload portable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: WHAM_Quick_Replies_v0.10.0-native-test1_win-x64
+          path: |
+            WHAM_Quick_Replies_v0.10.0-native-test1_win-x64.zip
+            WHAM_Quick_Replies_v0.10.0-native-test1_win-x64.zip.sha256.txt
+          if-no-files-found: error
+          retention-days: 30
