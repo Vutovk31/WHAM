@@ -1,0 +1,5 @@
+WHAM Quick Replies
+Version: 0.10.0-native-test1
+Channel: native portable test
+Platform: Windows x64
+Security profile: no PowerShell, no CMD launcher, no VBS, no autostart, no installer
