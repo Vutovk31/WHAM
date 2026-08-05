@@ -157,6 +157,54 @@ jobs:
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "$package.zip").Hash.ToLowerInvariant()
           Set-Content -LiteralPath "$package.zip.sha256.txt" -Value "$hash  $package.zip" -Encoding ascii
 
+      - name: Verify versioned archive integrity
+        shell: pwsh
+        run: |
+          $package = "WHAM_Quick_Replies_v0.10.0-native-test1_win-x64"
+          $expectedVersion = "0.10.0-native-test1"
+          $zipPath = "$package.zip"
+          $checksumPath = "$package.zip.sha256.txt"
+          $extractRoot = Join-Path $PWD "archive-verification"
+
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot -Force
+          $packageRoot = Join-Path $extractRoot $package
+          if (-not (Test-Path -LiteralPath $packageRoot -PathType Container)) {
+            throw "Archive does not contain the expected versioned root folder: $package"
+          }
+
+          $expectedNames = @(
+            "WHAM Quick Replies.exe",
+            "macros.json",
+            "README-FIRST.txt",
+            "VERSION.txt"
+          )
+          $actualFiles = Get-ChildItem -LiteralPath $packageRoot -Recurse -File
+          $relativeNames = $actualFiles | ForEach-Object {
+            [IO.Path]::GetRelativePath($packageRoot, $_.FullName).Replace('\', '/')
+          }
+          $unexpected = $relativeNames | Where-Object { $_ -notin $expectedNames }
+          $missing = $expectedNames | Where-Object { $_ -notin $relativeNames }
+          if ($unexpected -or $missing -or $relativeNames.Count -ne $expectedNames.Count) {
+            throw "Archive contents mismatch. Missing: $($missing -join ', '). Unexpected: $($unexpected -join ', ')."
+          }
+
+          $archiveVersion = (Get-Content -LiteralPath (Join-Path $packageRoot "VERSION.txt") -Raw).Trim()
+          if ($archiveVersion -ne $expectedVersion) {
+            throw "Archive VERSION.txt mismatch: expected '$expectedVersion', found '$archiveVersion'"
+          }
+
+          $checksumLine = (Get-Content -LiteralPath $checksumPath -Raw).Trim()
+          $expectedHash = ($checksumLine -split '\s+')[0].ToLowerInvariant()
+          $actualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zipPath).Hash.ToLowerInvariant()
+          if ($expectedHash -ne $actualHash) {
+            throw "SHA256 mismatch for $zipPath"
+          }
+
+          $forbidden = $actualFiles | Where-Object { $_.Extension -in @('.cmd', '.bat', '.ps1', '.vbs') }
+          if ($forbidden) {
+            throw "Forbidden script files found inside final archive: $($forbidden.FullName -join ', ')"
+          }
+
       - name: Upload portable package
         uses: actions/upload-artifact@v4
         with:
