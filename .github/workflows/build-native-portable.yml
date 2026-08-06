@@ -107,6 +107,41 @@ jobs:
             throw "Forbidden script files found: $($forbidden.FullName -join ', ')"
           }
 
+      - name: Run deterministic package self-test
+        shell: pwsh
+        run: |
+          $publishDirectory = (Resolve-Path -LiteralPath "native-publish").Path
+          $executable = Join-Path $publishDirectory "WHAM Quick Replies.exe"
+          $selfTestLog = Join-Path $publishDirectory "WHAM-self-test.log"
+          Remove-Item -LiteralPath $selfTestLog -Force -ErrorAction SilentlyContinue
+
+          $process = Start-Process `
+            -FilePath $executable `
+            -ArgumentList "--self-test" `
+            -WorkingDirectory $publishDirectory `
+            -Wait `
+            -PassThru
+
+          if ($process.ExitCode -ne 0) {
+            $details = if (Test-Path -LiteralPath $selfTestLog) {
+              Get-Content -LiteralPath $selfTestLog -Raw
+            } else {
+              "No WHAM-self-test.log was produced."
+            }
+            throw "Native package self-test failed with exit code $($process.ExitCode). $details"
+          }
+
+          if (-not (Test-Path -LiteralPath $selfTestLog -PathType Leaf)) {
+            throw "Native package self-test returned success but did not create WHAM-self-test.log"
+          }
+
+          $selfTestResult = (Get-Content -LiteralPath $selfTestLog -Raw).Trim()
+          if ($selfTestResult -notmatch '^PASS \| WHAM Quick Replies 0\.10\.0-native-test1 \|') {
+            throw "Unexpected native package self-test result: $selfTestResult"
+          }
+
+          Remove-Item -LiteralPath $selfTestLog -Force
+
       - name: Smoke-test published executable startup
         shell: pwsh
         run: |
