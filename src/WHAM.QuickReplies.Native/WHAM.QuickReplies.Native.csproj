@@ -8,15 +8,28 @@
     <AssemblyName>WHAM Quick Replies</AssemblyName>
     <RootNamespace>WHAM.QuickReplies.Native</RootNamespace>
     <StartupObject>WHAM.QuickReplies.Native.NativeProgram</StartupObject>
+
     <Version>0.10.0</Version>
+    <VersionPrefix>0.10.0</VersionPrefix>
+    <VersionSuffix>native-test1</VersionSuffix>
+    <InformationalVersion>0.10.0-native-test1</InformationalVersion>
     <FileVersion>0.10.0.0</FileVersion>
     <AssemblyVersion>0.10.0.0</AssemblyVersion>
+    <AssemblyTitle>WHAM Quick Replies</AssemblyTitle>
+    <Product>WHAM Quick Replies</Product>
+    <Description>Local Windows text macro utility — native portable test build.</Description>
+    <Company>Vutovk31</Company>
+    <RepositoryUrl>https://github.com/Vutovk31/WHAM</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
   </PropertyGroup>
