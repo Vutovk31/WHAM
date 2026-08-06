@@ -119,16 +119,27 @@ jobs:
             -FilePath $executable `
             -ArgumentList "--self-test" `
             -WorkingDirectory $publishDirectory `
-            -Wait `
             -PassThru
 
-          if ($process.ExitCode -ne 0) {
-            $details = if (Test-Path -LiteralPath $selfTestLog) {
-              Get-Content -LiteralPath $selfTestLog -Raw
-            } else {
-              "No WHAM-self-test.log was produced."
+          try {
+            if (-not $process.WaitForExit(15000)) {
+              throw "Native package self-test did not finish within 15 seconds."
             }
-            throw "Native package self-test failed with exit code $($process.ExitCode). $details"
+
+            if ($process.ExitCode -ne 0) {
+              $details = if (Test-Path -LiteralPath $selfTestLog) {
+                Get-Content -LiteralPath $selfTestLog -Raw
+              } else {
+                "No WHAM-self-test.log was produced."
+              }
+              throw "Native package self-test failed with exit code $($process.ExitCode). $details"
+            }
+          }
+          finally {
+            if (-not $process.HasExited) {
+              $process.Kill($true)
+              $process.WaitForExit(5000) | Out-Null
+            }
           }
 
           if (-not (Test-Path -LiteralPath $selfTestLog -PathType Leaf)) {
