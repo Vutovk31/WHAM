@@ -159,8 +159,10 @@ internal sealed class NativeTrayContext : ApplicationContext
         try
         {
             WaitForModifierRelease();
-            SetClipboard(macro.Text);
-            KeyboardInput.Paste();
+            if (!KeyboardInput.TryTypeUnicode(macro.Text))
+            {
+                PasteWithClipboardPreserved(macro.Text);
+            }
         }
         catch (Exception exception)
         {
@@ -190,14 +192,80 @@ internal sealed class NativeTrayContext : ApplicationContext
         }
     }
 
-    private static void SetClipboard(string text)
+    private static void PasteWithClipboardPreserved(string text)
+    {
+        var snapshot = CaptureClipboard();
+        try
+        {
+            SetClipboardText(text);
+            KeyboardInput.Paste();
+
+            // Ctrl+V is queued to the foreground application. Give it a brief
+            // window to read the temporary clipboard before restoring the user data.
+            Thread.Sleep(150);
+        }
+        finally
+        {
+            RestoreClipboard(snapshot);
+        }
+    }
+
+    private static DataObject? CaptureClipboard()
+    {
+        var source = Clipboard.GetDataObject();
+        if (source is null)
+        {
+            return null;
+        }
+
+        var snapshot = new DataObject();
+        foreach (var format in source.GetFormats(autoConvert: false))
+        {
+            try
+            {
+                var value = source.GetData(format, autoConvert: false);
+                if (value is not null)
+                {
+                    snapshot.SetData(format, autoConvert: false, value);
+                }
+            }
+            catch
+            {
+                // A provider can expose a transient/custom format that cannot be
+                // materialized. Preserve every format that can be safely copied.
+            }
+        }
+
+        return snapshot;
+    }
+
+    private static void SetClipboardText(string text)
+    {
+        SetClipboardData(() => Clipboard.SetText(text, TextDataFormat.UnicodeText));
+    }
+
+    private static void RestoreClipboard(DataObject? snapshot)
+    {
+        SetClipboardData(() =>
+        {
+            if (snapshot is null || snapshot.GetFormats(autoConvert: false).Length == 0)
+            {
+                Clipboard.Clear();
+                return;
+            }
+
+            Clipboard.SetDataObject(snapshot, copy: true);
+        });
+    }
+
+    private static void SetClipboardData(Action action)
     {
         Exception? lastError = null;
         for (var attempt = 0; attempt < 20; attempt++)
         {
             try
             {
-                Clipboard.SetText(text, TextDataFormat.UnicodeText);
+                action();
                 return;
             }
             catch (Exception exception)
@@ -369,6 +437,7 @@ internal static class KeyboardInput
 {
     private const uint InputKeyboard = 1;
     private const uint KeyEventKeyUp = 0x0002;
+    private const uint KeyEventUnicode = 0x0004;
     private const ushort VkControl = 0x11;
     private const ushort VkV = 0x56;
 
@@ -382,6 +451,46 @@ internal static class KeyboardInput
             }
         }
         return false;
+    }
+
+    internal static bool TryTypeUnicode(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return true;
+        }
+
+        const int chunkSize = 128;
+        var sentAny = false;
+
+        for (var offset = 0; offset < text.Length; offset += chunkSize)
+        {
+            var characterCount = Math.Min(chunkSize, text.Length - offset);
+            var inputs = new Input[characterCount * 2];
+
+            for (var index = 0; index < characterCount; index++)
+            {
+                var character = text[offset + index];
+                inputs[index * 2] = UnicodeKey(character, keyUp: false);
+                inputs[(index * 2) + 1] = UnicodeKey(character, keyUp: true);
+            }
+
+            var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+            if (sent != (uint)inputs.Length)
+            {
+                if (!sentAny && sent == 0)
+                {
+                    return false;
+                }
+
+                throw new InvalidOperationException(
+                    "Windows приняла только часть Unicode-ввода. Вставка остановлена, чтобы не дублировать текст через буфер обмена.");
+            }
+
+            sentAny = true;
+        }
+
+        return true;
     }
 
     internal static void Paste()
@@ -400,6 +509,20 @@ internal static class KeyboardInput
             throw new InvalidOperationException("Windows не приняла команду вставки Ctrl+V.");
         }
     }
+
+    private static Input UnicodeKey(char character, bool keyUp) => new()
+    {
+        Type = InputKeyboard,
+        Union = new InputUnion
+        {
+            Keyboard = new KeyboardInputData
+            {
+                VirtualKey = 0,
+                ScanCode = character,
+                Flags = KeyEventUnicode | (keyUp ? KeyEventKeyUp : 0)
+            }
+        }
+    };
 
     private static Input Key(ushort virtualKey, bool keyUp) => new()
     {
