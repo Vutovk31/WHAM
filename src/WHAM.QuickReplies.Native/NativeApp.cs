@@ -530,7 +530,7 @@ internal static class KeyboardInput
         };
 
         var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
-        if (sent != inputs.Length)
+        if (sent != (uint)inputs.Length)
         {
             throw new InvalidOperationException("Windows не приняла команду вставки Ctrl+V.");
         }
