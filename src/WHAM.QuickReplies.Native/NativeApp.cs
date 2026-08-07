@@ -439,6 +439,7 @@ internal static class KeyboardInput
     private const uint KeyEventKeyUp = 0x0002;
     private const uint KeyEventUnicode = 0x0004;
     private const ushort VkControl = 0x11;
+    private const ushort VkReturn = 0x0D;
     private const ushort VkV = 0x56;
 
     internal static bool AnyModifierDown()
@@ -460,36 +461,61 @@ internal static class KeyboardInput
             return true;
         }
 
-        const int chunkSize = 128;
+        const int maxInputsPerBatch = 256;
+        var batch = new List<Input>(maxInputsPerBatch);
         var sentAny = false;
 
-        for (var offset = 0; offset < text.Length; offset += chunkSize)
+        for (var index = 0; index < text.Length; index++)
         {
-            var characterCount = Math.Min(chunkSize, text.Length - offset);
-            var inputs = new Input[characterCount * 2];
-
-            for (var index = 0; index < characterCount; index++)
+            var character = text[index];
+            if (character is '\r' or '\n')
             {
-                var character = text[offset + index];
-                inputs[index * 2] = UnicodeKey(character, keyUp: false);
-                inputs[(index * 2) + 1] = UnicodeKey(character, keyUp: true);
-            }
-
-            var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
-            if (sent != (uint)inputs.Length)
-            {
-                if (!sentAny && sent == 0)
+                if (character == '\r' && index + 1 < text.Length && text[index + 1] == '\n')
                 {
-                    return false;
+                    index++;
                 }
 
-                throw new InvalidOperationException(
-                    "Windows приняла только часть Unicode-ввода. Вставка остановлена, чтобы не дублировать текст через буфер обмена.");
+                batch.Add(Key(VkReturn, false));
+                batch.Add(Key(VkReturn, true));
+            }
+            else
+            {
+                batch.Add(UnicodeKey(character, keyUp: false));
+                batch.Add(UnicodeKey(character, keyUp: true));
             }
 
-            sentAny = true;
+            if (batch.Count >= maxInputsPerBatch && !TrySendBatch(batch, ref sentAny))
+            {
+                return false;
+            }
         }
 
+        return TrySendBatch(batch, ref sentAny);
+    }
+
+    private static bool TrySendBatch(List<Input> batch, ref bool sentAny)
+    {
+        if (batch.Count == 0)
+        {
+            return true;
+        }
+
+        var inputs = batch.ToArray();
+        batch.Clear();
+
+        var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
+        if (sent != (uint)inputs.Length)
+        {
+            if (!sentAny && sent == 0)
+            {
+                return false;
+            }
+
+            throw new InvalidOperationException(
+                "Windows приняла только часть Unicode-ввода. Вставка остановлена, чтобы не дублировать текст через буфер обмена.");
+        }
+
+        sentAny = true;
         return true;
     }
 
