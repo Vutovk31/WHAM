@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - "src/WHAM.QuickReplies.Native/**"
-      - ".github/workflows/build-native-portable.yml"
 
 permissions:
   contents: read
