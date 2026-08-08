@@ -52,7 +52,8 @@ internal static class NativeSelfTest
                 $"VERSION.txt mismatch: expected '{NativeProgram.Version}', found '{packagedVersion}'.");
         }
 
-        using var document = JsonDocument.Parse(File.ReadAllText(macroPath));
+        var packagedMacroText = File.ReadAllText(macroPath);
+        using var document = JsonDocument.Parse(packagedMacroText);
         if (document.RootElement.ValueKind != JsonValueKind.Array)
         {
             throw new InvalidDataException("macros.json must contain a JSON array.");
@@ -101,6 +102,47 @@ internal static class NativeSelfTest
         {
             throw new InvalidDataException(
                 $"Expected between 1 and 9 macros, found {count}.");
+        }
+
+        VerifyRuntimeLoadDoesNotRewriteValidMacros(packagedMacroText, count);
+    }
+
+    private static void VerifyRuntimeLoadDoesNotRewriteValidMacros(string packagedMacroText, int expectedCount)
+    {
+        var testDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"wham-self-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(testDirectory);
+
+        try
+        {
+            var testMacroPath = Path.Combine(testDirectory, "macros.json");
+            File.WriteAllText(testMacroPath, packagedMacroText);
+
+            var loaded = MacroFile.LoadOrCreate(testMacroPath);
+            if (loaded.Count != expectedCount)
+            {
+                throw new InvalidDataException(
+                    $"Runtime macro load changed macro count: expected {expectedCount}, found {loaded.Count}.");
+            }
+
+            var afterLoad = File.ReadAllText(testMacroPath);
+            if (!string.Equals(packagedMacroText, afterLoad, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "Runtime macro load rewrote an already valid macros.json file.");
+            }
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(testDirectory, recursive: true);
+            }
+            catch
+            {
+                // Temporary self-test cleanup must not hide the validation result.
+            }
         }
     }
 
