@@ -683,7 +683,7 @@ internal static class MacroFile
 
             return macros;
         }
-        catch (Exception exception)
+        catch (JsonException exception)
         {
             NativeProgram.Log(exception);
             Backup(path, "corrupt");
