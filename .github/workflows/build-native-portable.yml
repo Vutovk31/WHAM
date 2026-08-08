@@ -55,6 +55,17 @@ jobs:
             throw "NativeApp.cs does not expose version '$expectedVersion'"
           }
 
+          $clipboardRegressionGuards = @(
+            'GetClipboardSequenceNumber',
+            'temporarySequence != 0',
+            'GetClipboardSequenceNumber() == temporarySequence'
+          )
+          foreach ($guard in $clipboardRegressionGuards) {
+            if ($nativeApp -notmatch [Regex]::Escape($guard)) {
+              throw "Clipboard preservation regression guard is missing: $guard"
+            }
+          }
+
           [xml]$project = Get-Content -LiteralPath "$source/WHAM.QuickReplies.Native.csproj" -Raw
           $assemblyVersion = [string]$project.Project.PropertyGroup.Version
           if ($assemblyVersion -ne '0.10.0') {
