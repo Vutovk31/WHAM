@@ -195,9 +195,11 @@ internal sealed class NativeTrayContext : ApplicationContext
     private static void PasteWithClipboardPreserved(string text)
     {
         var snapshot = CaptureClipboard();
+        uint temporarySequence = 0;
         try
         {
             SetClipboardText(text);
+            temporarySequence = GetClipboardSequenceNumber();
             KeyboardInput.Paste();
 
             // Ctrl+V is queued to the foreground application. Give it a brief
@@ -206,7 +208,13 @@ internal sealed class NativeTrayContext : ApplicationContext
         }
         finally
         {
-            RestoreClipboard(snapshot);
+            // Restore only while the clipboard still contains WHAM's temporary
+            // payload. If the user or another app copied something new meanwhile,
+            // preserve that newer clipboard data instead of overwriting it.
+            if (temporarySequence != 0 && GetClipboardSequenceNumber() == temporarySequence)
+            {
+                RestoreClipboard(snapshot);
+            }
         }
     }
 
@@ -303,6 +311,9 @@ internal sealed class NativeTrayContext : ApplicationContext
             UseShellExecute = true
         });
     }
+
+    [DllImport("user32.dll")]
+    private static extern uint GetClipboardSequenceNumber();
 
     protected override void ExitThreadCore()
     {
