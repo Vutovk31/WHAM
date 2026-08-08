@@ -105,6 +105,7 @@ internal static class NativeSelfTest
         }
 
         VerifyRuntimeLoadDoesNotRewriteValidMacros(packagedMacroText, count);
+        VerifyMalformedJsonRecoveryPreservesEvidence();
     }
 
     private static void VerifyRuntimeLoadDoesNotRewriteValidMacros(string packagedMacroText, int expectedCount)
@@ -131,6 +132,60 @@ internal static class NativeSelfTest
             {
                 throw new InvalidDataException(
                     "Runtime macro load rewrote an already valid macros.json file.");
+            }
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(testDirectory, recursive: true);
+            }
+            catch
+            {
+                // Temporary self-test cleanup must not hide the validation result.
+            }
+        }
+    }
+
+    private static void VerifyMalformedJsonRecoveryPreservesEvidence()
+    {
+        var testDirectory = Path.Combine(
+            Path.GetTempPath(),
+            $"wham-self-test-corrupt-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(testDirectory);
+
+        try
+        {
+            const string malformedJson = "[{\"id\":\"broken\",\"title\":\"Broken\"";
+            var testMacroPath = Path.Combine(testDirectory, "macros.json");
+            File.WriteAllText(testMacroPath, malformedJson);
+
+            var loaded = MacroFile.LoadOrCreate(testMacroPath);
+            if (loaded.Count == 0)
+            {
+                throw new InvalidDataException(
+                    "Malformed macros.json recovery returned no default macros.");
+            }
+
+            var backups = Directory.GetFiles(testDirectory, "macros.corrupt.*.json");
+            if (backups.Length != 1)
+            {
+                throw new InvalidDataException(
+                    $"Malformed macros.json recovery must create exactly one corrupt backup, found {backups.Length}.");
+            }
+
+            var preserved = File.ReadAllText(backups[0]);
+            if (!string.Equals(preserved, malformedJson, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "Malformed macros.json backup did not preserve the original file exactly.");
+            }
+
+            using var recoveredDocument = JsonDocument.Parse(File.ReadAllText(testMacroPath));
+            if (recoveredDocument.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                throw new InvalidDataException(
+                    "Malformed macros.json recovery did not produce a valid JSON array.");
             }
         }
         finally
